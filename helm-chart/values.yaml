@@ -1,50 +1,57 @@
-# Copyright 2024 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# Default values for onlineboutique.
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
-
+# Configuración global de imágenes
 images:
   repository: us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo
-  # Overrides the image tag whose default is the chart appVersion.
+  # Sobrescribe el tag predeterminado que toma del appVersion del Chart
   tag: ""
 
+# Parámetros de Seguridad y Autenticación
+auth:
+  adminSecretKey: "super-secret-admin-token-2026"
+
+# Configuración de la Base de Datos PostgreSQL (Reseñas y Compras Verificadas)
+database:
+  enabled: true
+  host: "postgres-review-db"
+  port: 5432
+  dbName: "reviewdb"
+  username: "postgres"
+  password: "postgres-secure-password-123"
+
+# Configuración del Review Service
+reviewservice:
+  enabled: true
+  name: reviewservice
+  replicaCount: 1
+  image:
+    repository: "docker.io/demo/reviewservice"
+    tag: "latest"
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+  env:
+    enableAdminApi: "true"
+    checkoutServiceAddr: "checkoutservice:5050"
+
+# Cuentas de Servicio (ServiceAccounts)
 serviceAccounts:
-  # Specifies whether service accounts should be created.
   create: true
-  # Annotations to add to the service accounts.
   annotations: {}
-  # Annotations to add only for the cartservice app. This allows to follow the least privilege principle where only cartservice needs to connect to external database for example via Workload Identity.
   annotationsOnlyForCartservice: false
 
+# Políticas de Red e Istio
 networkPolicies:
-  # Specifies if the NetworkPolicies are created or not. If true, one fine granular NetworkPolicy per app is created.
   create: false
 
 sidecars:
-  # Specifies if the Sidecars are created or not. If true, one fine granular Sidecar per app is created.
   create: false
 
 authorizationPolicies:
-  # Specifies if the AuthorizationPolicies are created or not. If true, one fine granular AuthorizationPolicy per app is created.
   create: false
 
 opentelemetryCollector:
   create: false
   name: opentelemetrycollector
-  # Specifies the project id for the otel collector. If set as "PROJECT_ID" (default value), an initContainer will automatically retrieve the project id value from the metadata server.
   projectId: "PROJECT_ID"
 
 googleCloudOperations:
@@ -59,6 +66,7 @@ seccompProfile:
 securityContext:
   enable: true
 
+# Configuración de Microservicios Base
 adService:
   create: true
   name: adservice
@@ -119,9 +127,11 @@ frontend:
   name: frontend
   externalService: true
   cymbalBranding: false
-  # One of: local, gcp, aws, azure, onprem, alibaba. When not set, defaults to "local" unless running in GKE, otherwise auto-sets to gcp.
   platform: local
   singleSharedSession: false
+  service:
+    type: ClusterIP
+    port: 80
   virtualService:
     create: false
     hosts:
@@ -138,6 +148,9 @@ frontend:
     limits:
       cpu: 200m
       memory: 128Mi
+  env:
+    reviewServiceAddr: "reviewservice:8080"
+    enableAdminPanel: "true"
 
 loadGenerator:
   create: true
@@ -165,7 +178,6 @@ paymentService:
 productCatalogService:
   create: true
   name: productcatalogservice
-  # Specifies an extra latency to any request on productcatalogservice, by default no extra latency.
   extraLatency: ""
   resources:
     requests:
@@ -198,13 +210,11 @@ shippingService:
       memory: 128Mi
 
 cartDatabase:
-  # Specifies the type of the cartservice's database, could be either redis or spanner.
   type: redis
   connectionString: "redis-cart:6379"
   inClusterRedis:
     create: true
     name: redis-cart
-    # Uses the public redis image from Docker Hub, otherwise will use the images.repository.
     publicRepository: true
   externalRedisTlsOrigination:
     enable: false
@@ -213,8 +223,6 @@ cartDatabase:
     endpointPort: ""
     certificate: ""
 
-# @TODO: This service is not currently available in Helm.
-# https://github.com/GoogleCloudPlatform/microservices-demo/tree/main/kustomize/components/shopping-assistant
 shoppingAssistantService:
   create: false
   name: shoppingassistantservice

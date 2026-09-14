@@ -30,7 +30,7 @@ module "eks" {
   version = "18.31.2"
 
   cluster_name    = "online-boutique-cluster"
-  cluster_version = "1.30" # Mantenemos 1.30 para coincidir con el clúster ya creado en AWS
+  cluster_version = "1.31" # Mantenemos 1.30 para coincidir con el clúster ya creado en AWS
 
   vpc_id                         = module.vpc.vpc_id
   subnet_ids                     = module.vpc.private_subnets
@@ -49,9 +49,9 @@ module "eks" {
 
   eks_managed_node_groups = {
     nodes = {
-      min_size     = 0
-      max_size     = 2
-      desired_size = 0
+      min_size     = 2
+      max_size     = 4
+      desired_size = 2
 
       instance_types = ["t3.medium"]
       ami_type       = "AL2_x86_64" # Define explícitamente la AMI compatible con K8s 1.30

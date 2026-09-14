@@ -4,7 +4,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#      http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -88,8 +88,10 @@ spec:
             value: "adservice:9555"
           - name: SHOPPING_ASSISTANT_SERVICE_ADDR
             value: "shoppingassistantservice:80"
+          - name: REVIEW_SERVICE_ADDR
+            value: "reviewservice:8080"
           # # ENV_PLATFORM: One of: local, gcp, aws, azure, onprem, alibaba
-          # # When not set, defaults to "local" unless running in GKE, otherwies auto-sets to gcp
+          # # When not set, defaults to "local" unless running in GKE, otherwise auto-sets to gcp
           # - name: ENV_PLATFORM
           #   value: "aws"
           - name: ENABLE_PROFILER
@@ -875,6 +877,7 @@ spec:
           grpc:
             port: 50051
         livenessProbe:
+          periodSeconds: 5
           grpc:
             port: 50051
         resources:
