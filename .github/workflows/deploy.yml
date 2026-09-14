@@ -1,4 +1,4 @@
-name: CI/CD Pipeline - Online Boutique (AWS EKS)
+ï»¿name: CI/CD Pipeline - Online Boutique (AWS EKS)
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout del código
+      - name: Checkout del cÃ³digo
         uses: actions/checkout@v4
 
       - name: Configurar credenciales de AWS
@@ -30,7 +30,7 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Iniciar sesión en Amazon ECR
+      - name: Iniciar sesiÃ³n en Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
@@ -41,7 +41,7 @@ jobs:
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./src/reviewservice
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest ./src/reviewservice
-          
+
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
