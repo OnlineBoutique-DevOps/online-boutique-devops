@@ -27,3 +27,7 @@ pkg/
 release/wi-kubernetes-manifests.yaml
 vendor/
 gha-creds-*.json
+
+.terraform/
+*.tfstate
+*.tfstate.backup
