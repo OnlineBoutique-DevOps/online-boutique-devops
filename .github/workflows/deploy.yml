@@ -1,4 +1,4 @@
-ï»¿name: CI/CD Pipeline - Online Boutique (AWS EKS)
+name: CI/CD Pipeline - Online Boutique (AWS EKS)
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout del cÃ³digo
+      - name: Checkout del código
         uses: actions/checkout@v4
 
       - name: Configurar credenciales de AWS
@@ -30,7 +30,7 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Iniciar sesiÃ³n en Amazon ECR
+      - name: Iniciar sesión en Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
@@ -62,5 +62,6 @@ jobs:
         run: |
           helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
             --namespace default \
+            --force \
             --set reviewservice.image.repository=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }} \
             --set reviewservice.image.tag=${{ github.sha }}
