@@ -9,7 +9,7 @@ on:
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: reviewservice
-  EKS_CLUSTER_NAME: boutique-cluster
+  EKS_CLUSTER_NAME: online-boutique-cluster
   HELM_RELEASE_NAME: onlineboutique
   HELM_CHART_PATH: ./helm-chart
 
