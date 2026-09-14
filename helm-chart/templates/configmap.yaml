@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: onlineboutique-config
+  labels:
+    {{- include "onlineboutique.labels" . | nindent 4 }}
+data:
+  REVIEW_SERVICE_ADDR: {{ .Values.frontend.env.reviewServiceAddr | quote }}
+  ENABLE_ADMIN_PANEL: {{ .Values.frontend.env.enableAdminPanel | quote }}
+  ENABLE_ADMIN_API: {{ .Values.reviewservice.env.enableAdminApi | quote }}
+  CHECKOUT_SERVICE_ADDR: {{ .Values.reviewservice.env.checkoutServiceAddr | quote }}

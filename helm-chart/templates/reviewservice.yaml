@@ -1,0 +1,78 @@
+{{- if .Values.reviewservice.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reviewservice
+  labels:
+    app: reviewservice
+    {{- include "onlineboutique.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.reviewservice.replicaCount }}
+  selector:
+    matchLabels:
+      app: reviewservice
+  template:
+    metadata:
+      labels:
+        app: reviewservice
+    spec:
+      containers:
+      - name: server
+        image: "{{ .Values.reviewservice.image.repository }}:{{ .Values.reviewservice.image.tag }}"
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        - name: ENABLE_ADMIN_API
+          valueFrom:
+            configMapKeyRef:
+              name: onlineboutique-config
+              key: ENABLE_ADMIN_API
+        - name: CHECKOUT_SERVICE_ADDR
+          valueFrom:
+            configMapKeyRef:
+              name: onlineboutique-config
+              key: CHECKOUT_SERVICE_ADDR
+        - name: DB_HOST
+          value: {{ .Values.database.host | quote }}
+        - name: DB_PORT
+          value: {{ .Values.database.port | quote }}
+        - name: DB_NAME
+          value: {{ .Values.database.dbName | quote }}
+        - name: DB_USER
+          value: {{ .Values.database.username | quote }}
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: reviewservice-secrets
+              key: DB_PASSWORD
+        - name: ADMIN_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: reviewservice-secrets
+              key: ADMIN_SECRET_KEY
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reviewservice
+  labels:
+    app: reviewservice
+spec:
+  type: {{ .Values.reviewservice.service.type }}
+  selector:
+    app: reviewservice
+  ports:
+  - name: http
+    port: {{ .Values.reviewservice.service.port }}
+    targetPort: {{ .Values.reviewservice.service.targetPort }}
+{{- end }}

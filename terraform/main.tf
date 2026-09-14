@@ -1,100 +1,74 @@
-# Copyright 2022 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# 1. Crear red VPC para AWS
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "5.0.0"
 
-# Definition of local variables
-locals {
-  base_apis = [
-    "container.googleapis.com",
-    "monitoring.googleapis.com",
-    "cloudtrace.googleapis.com",
-    "cloudprofiler.googleapis.com"
-  ]
-  memorystore_apis = ["redis.googleapis.com"]
-  cluster_name     = google_container_cluster.my_cluster.name
-}
+  name            = "online-boutique-vpc"
+  cidr            = "10.0.0.0/16"
+  azs             = ["${var.aws_region}a", "${var.aws_region}b"]
+  public_subnets  = ["10.0.1.0/24", "10.0.2.0/24"]
+  private_subnets = ["10.0.10.0/24", "10.0.20.0/24"]
 
-# Enable Google Cloud APIs
-module "enable_google_apis" {
-  source  = "terraform-google-modules/project-factory/google//modules/project_services"
-  version = "~> 18.0"
+  enable_nat_gateway = true
+  single_nat_gateway = true
 
-  project_id                  = var.gcp_project_id
-  disable_services_on_destroy = false
-
-  # activate_apis is the set of base_apis and the APIs required by user-configured deployment options
-  activate_apis = concat(local.base_apis, var.memorystore ? local.memorystore_apis : [])
-}
-
-# Create GKE cluster
-resource "google_container_cluster" "my_cluster" {
-
-  name     = var.name
-  location = var.region
-
-  # Enable autopilot for this cluster
-  enable_autopilot = true
-
-  # Set an empty ip_allocation_policy to allow autopilot cluster to spin up correctly
-  ip_allocation_policy {
+  # Tags requeridos para la integración de Kubernetes y Load Balancers
+  public_subnet_tags = {
+    "kubernetes.io/cluster/online-boutique-cluster" = "shared"
+    "kubernetes.io/role/elb"                        = "1"
   }
 
-  # Avoid setting deletion_protection to false
-  # until you're ready (and certain you want) to destroy the cluster.
-  # deletion_protection = false
-
-  depends_on = [
-    module.enable_google_apis
-  ]
-}
-
-# Get credentials for cluster
-module "gcloud" {
-  source  = "terraform-google-modules/gcloud/google"
-  version = "~> 4.0"
-
-  platform              = "linux"
-  additional_components = ["kubectl", "beta"]
-
-  create_cmd_entrypoint = "gcloud"
-  # Module does not support explicit dependency
-  # Enforce implicit dependency through use of local variable
-  create_cmd_body = "container clusters get-credentials ${local.cluster_name} --zone=${var.region} --project=${var.gcp_project_id}"
-}
-
-# Apply YAML kubernetes-manifest configurations
-resource "null_resource" "apply_deployment" {
-  provisioner "local-exec" {
-    interpreter = ["bash", "-exc"]
-    command     = "kubectl apply -k ${var.filepath_manifest} -n ${var.namespace}"
+  private_subnet_tags = {
+    "kubernetes.io/cluster/online-boutique-cluster" = "shared"
+    "kubernetes.io/role/internal-elb"               = "1"
   }
-
-  depends_on = [
-    module.gcloud
-  ]
 }
 
-# Wait condition for all Pods to be ready before finishing
-resource "null_resource" "wait_conditions" {
-  provisioner "local-exec" {
-    interpreter = ["bash", "-exc"]
-    command     = <<-EOT
-    kubectl wait --for=condition=AVAILABLE apiservice/v1beta1.metrics.k8s.io --timeout=180s
-    kubectl wait --for=condition=ready pods --all -n ${var.namespace} --timeout=280s
-    EOT
-  }
+# 2. Crear Clúster de Kubernetes (AWS EKS) - Ajustado para AWS Academy / Vocareum
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "18.31.2"
 
-  depends_on = [
-    resource.null_resource.apply_deployment
-  ]
+  cluster_name    = "online-boutique-cluster"
+  cluster_version = "1.31" # Mantenemos 1.30 para coincidir con el clúster ya creado en AWS
+
+  vpc_id                         = module.vpc.vpc_id
+  subnet_ids                     = module.vpc.private_subnets
+  cluster_endpoint_public_access = true
+  create_cloudwatch_log_group    = false
+
+  # Desactivar OIDC/IRSA para evitar el bloqueo de iam:CreateOpenIDConnectProvider en Vocareum
+  enable_irsa = false
+
+  # Reutilizar LabRole para el plano de control (Cluster)
+  create_iam_role = false
+  iam_role_arn    = "arn:aws:iam::414931564967:role/LabRole"
+
+  # Desactivar la gestión del ConfigMap aws-auth
+  manage_aws_auth_configmap = false
+
+  eks_managed_node_groups = {
+    nodes = {
+      min_size     = 2
+      max_size     = 4
+      desired_size = 2
+
+      instance_types = ["t3.medium"]
+      ami_type       = "AL2_x86_64" # Define explícitamente la AMI compatible con K8s 1.30
+
+      # Reutilizar LabRole para los nodos trabajadores (Node Group)
+      create_iam_role = false
+      iam_role_arn    = "arn:aws:iam::414931564967:role/LabRole"
+    }
+  }
+}
+
+# 3. Registro de imágenes (Amazon ECR) para el servicio de Reseñas
+resource "aws_ecr_repository" "review_service" {
+  name                 = "online-boutique/reviewservice"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
 }
