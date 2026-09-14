@@ -60,7 +60,7 @@ jobs:
 
       - name: Desplegar en EKS con Helm
         run: |
-          kubectl delete serviceaccount adservice --namespace default --ignore-not-found=true
+          kubectl delete deployments,services,serviceaccounts --all --namespace default --ignore-not-found=true
           helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
             --namespace default \
             --set reviewservice.image.repository=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }} \
