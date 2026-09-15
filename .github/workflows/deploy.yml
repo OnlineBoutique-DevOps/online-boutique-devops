@@ -10,7 +10,7 @@ env:
   AWS_REGION: us-east-1
   EKS_CLUSTER_NAME: online-boutique-cluster
   HELM_RELEASE_NAME: onlineboutique
-  HELM_CHART_PATH: ./microservices-demo/helm-chart
+  HELM_CHART_PATH: ./helm-chart
 
 jobs:
   deploy:
