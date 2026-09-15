@@ -48,3 +48,4 @@ jobs:
             --namespace default \
             --set frontend.externalService=true \
             --set service.type=LoadBalancer
+            --reset-values
