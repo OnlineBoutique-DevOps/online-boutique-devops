@@ -47,5 +47,6 @@ jobs:
           helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
             --namespace default \
             --set frontend.externalService=true \
-            --set service.type=LoadBalancer
+            --set service.type=LoadBalancer \
+            --force \
             --reset-values
