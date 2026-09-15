@@ -11,7 +11,7 @@ env:
   ECR_REPOSITORY: reviewservice
   EKS_CLUSTER_NAME: online-boutique-cluster
   HELM_RELEASE_NAME: onlineboutique
-  HELM_CHART_PATH: ./helm-chart
+  HELM_CHART_PATH: ./microservices-demo/helm-chart
 
 jobs:
   build-and-deploy:
