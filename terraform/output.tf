@@ -1,5 +1,6 @@
-# Outputs temporales solo para ECR (Paso 1)
-# Los outputs de EKS están comentados temporalmente debido a problemas de IAM
+# Outputs de Terraform
+# NOTA: Los outputs de EKS están comentados temporalmente debido a problemas de IAM en AWS Academy
+# Descomentar cuando se resuelvan los permisos IAM para EKS
 
 # output "cluster_name" {
 #   description = "Nombre del clúster EKS creado"
