@@ -1,8 +1,8 @@
-# Configuración global de imágenes
+# Configuración global de imágenes para Amazon ECR
 images:
-  repository: us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo
+  repository: 532727285947.dkr.ecr.us-east-1.amazonaws.com/online-boutique
   # Sobrescribe el tag predeterminado que toma del appVersion del Chart
-  tag: ""
+  tag: "latest"
 
 # Parámetros de Seguridad y Autenticación
 auth:
@@ -23,7 +23,7 @@ reviewservice:
   name: reviewservice
   replicaCount: 1
   image:
-    repository: "docker.io/demo/reviewservice"
+    repository: "532727285947.dkr.ecr.us-east-1.amazonaws.com/online-boutique/reviewservice"
     tag: "latest"
   service:
     type: ClusterIP
