@@ -13,7 +13,8 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+  AWS_ACCOUNT_ID: "532727285947"
+  ECR_REGISTRY: 532727285947.dkr.ecr.us-east-1.amazonaws.com
   ECR_REPOSITORY_PREFIX: online-boutique
 
 jobs:
