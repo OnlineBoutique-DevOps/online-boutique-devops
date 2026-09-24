@@ -66,19 +66,26 @@ jobs:
       - name: Construir imagen Docker - ${{ matrix.service }}
         run: |
           SERVICE="${{ matrix.service }}"
-          echo "Processing service: $SERVICE"
+          echo "=== Processing service: $SERVICE ==="
           
           # Definir ruta del Dockerfile según el servicio
-          if [ "$SERVICE" = "cartservice" ]; then
-            DOCKER_CONTEXT="./src/cartservice/src"
-          elif [ "$SERVICE" = "shoppingassistantservice" ]; then
-            DOCKER_CONTEXT="./src/shoppingassistantservice"
-          else
-            DOCKER_CONTEXT="./src/$SERVICE"
-          fi
+          case "$SERVICE" in
+            "cartservice")
+              DOCKER_CONTEXT="./src/cartservice/src"
+              ;;
+            "shoppingassistantservice")
+              DOCKER_CONTEXT="./src/shoppingassistantservice"
+              ;;
+            *)
+              DOCKER_CONTEXT="./src/$SERVICE"
+              ;;
+          esac
           
-          echo "Building $SERVICE from context: $DOCKER_CONTEXT"
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest $DOCKER_CONTEXT
+          echo "Docker context: $DOCKER_CONTEXT"
+          echo "Files in context:"
+          ls -la "$DOCKER_CONTEXT" || echo "Directory not found"
+          
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest "$DOCKER_CONTEXT"
 
       - name: Push imagen a ECR - ${{ matrix.service }}
         run: |
