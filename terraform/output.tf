@@ -1,12 +1,15 @@
-output "cluster_name" {
-  description = "Nombre del clúster EKS creado"
-  value       = module.eks.cluster_name
-}
+# Outputs temporales solo para ECR (Paso 1)
+# Los outputs de EKS están comentados temporalmente debido a problemas de IAM
 
-output "cluster_endpoint" {
-  description = "Endpoint para conectarse al clúster EKS"
-  value       = module.eks.cluster_endpoint
-}
+# output "cluster_name" {
+#   description = "Nombre del clúster EKS creado"
+#   value       = module.eks.cluster_name
+# }
+
+# output "cluster_endpoint" {
+#   description = "Endpoint para conectarse al clúster EKS"
+#   value       = module.eks.cluster_endpoint
+# }
 
 output "ecr_repository_url" {
   description = "URL del repositorio ECR para las imágenes Docker"
