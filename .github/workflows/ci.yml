@@ -65,17 +65,17 @@ jobs:
 
       - name: Construir imagen Docker - ${{ matrix.service }}
         run: |
-          SERVICE_NAME="${{ matrix.service }}"
-          if [ "$SERVICE_NAME" = "cartservice" ]; then
-            DOCKERFILE_PATH="./src/cartservice/src"
-          elif [ "$SERVICE_NAME" = "shoppingassistantservice" ]; then
-            DOCKERFILE_PATH="./src/shoppingassistantservice"
+          # Definir ruta del Dockerfile según el servicio
+          if [ "${{ matrix.service }}" = "cartservice" ]; then
+            DOCKER_CONTEXT="./src/cartservice/src"
+          elif [ "${{ matrix.service }}" = "shoppingassistantservice" ]; then
+            DOCKER_CONTEXT="./src/shoppingassistantservice"
           else
-            DOCKERFILE_PATH="./src/$SERVICE_NAME"
+            DOCKER_CONTEXT="./src/${{ matrix.service }}"
           fi
           
-          echo "Building $SERVICE_NAME from $DOCKERFILE_PATH"
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest $DOCKERFILE_PATH
+          echo "Building ${{ matrix.service }} from context: $DOCKER_CONTEXT"
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest $DOCKER_CONTEXT
 
       - name: Push imagen a ECR - ${{ matrix.service }}
         run: |
