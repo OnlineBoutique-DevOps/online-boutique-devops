@@ -36,6 +36,7 @@ jobs:
           - recommendationservice
           - reviewservice
           - shippingservice
+          - shoppingassistantservice
       fail-fast: false
 
     steps:
@@ -63,7 +64,13 @@ jobs:
 
       - name: Construir imagen Docker - ${{ matrix.service }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest ./src/${{ matrix.service }}
+          if [ "${{ matrix.service }}" = "cartservice" ]; then
+            docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest ./src/cartservice/src
+          elif [ "${{ matrix.service }}" = "shoppingassistantservice" ]; then
+            docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest ./src/shoppingassistantservice
+          else
+            docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest ./src/${{ matrix.service }}
+          fi
 
       - name: Push imagen a ECR - ${{ matrix.service }}
         run: |
@@ -91,3 +98,4 @@ jobs:
           echo "| recommendationservice | ${{ env.ECR_REGISTRY }}/online-boutique/recommendationservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
           echo "| reviewservice | ${{ env.ECR_REGISTRY }}/online-boutique/reviewservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
           echo "| shippingservice | ${{ env.ECR_REGISTRY }}/online-boutique/shippingservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| shoppingassistantservice | ${{ env.ECR_REGISTRY }}/online-boutique/shoppingassistantservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
