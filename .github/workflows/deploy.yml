@@ -29,7 +29,7 @@ jobs:
     if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'push'
 
     steps:
-      - name: Checkout del código
+      - name: Checkout del codigo
         uses: actions/checkout@v4
 
       - name: Configurar credenciales de AWS
@@ -60,12 +60,13 @@ jobs:
       - name: Crear valores personalizados para ECR
         run: |
           cat > helm-values-ecr.yaml << EOF
-          global:
-            imageRegistry: ${{ env.ECR_REGISTRY }}
-            imageTag: ${{ github.sha }}
+          images:
+            repository: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_PREFIX }}
+            tag: ${{ github.sha }}
           frontend:
             service:
               type: LoadBalancer
+            externalService: true
           EOF
 
       - name: Desplegar en EKS con Helm
