@@ -1,3 +1,17 @@
+{{- if .Values.serviceAccounts.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.frontend.name }}
+  namespace: {{ .Release.Namespace }}
+  {{- if not .Values.serviceAccounts.annotationsOnlyForCartservice }}
+  {{- with .Values.serviceAccounts.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+---
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,7 +29,11 @@ spec:
       labels:
         app: frontend
     spec:
-      serviceAccountName: frontend
+      {{- if .Values.serviceAccounts.create }}
+      serviceAccountName: {{ .Values.frontend.name }}
+      {{- else }}
+      serviceAccountName: default
+      {{- end }}
       securityContext:
         fsGroup: 1000
         runAsGroup: 1000
@@ -96,13 +114,14 @@ metadata:
   labels:
     app: frontend
 spec:
-  type: LoadBalancer
+  type: {{ .Values.frontend.service.type }}
   selector:
     app: frontend
   ports:
   - name: http
-    port: 80
+    port: {{ .Values.frontend.service.port }}
     targetPort: 8080
+{{- if .Values.frontend.externalService }}
 ---
 apiVersion: v1
 kind: Service
@@ -111,10 +130,11 @@ metadata:
   labels:
     app: frontend
 spec:
-  type: {{ .Values.frontend.service.type }}
+  type: LoadBalancer
   selector:
     app: frontend
   ports:
   - name: http
     port: {{ .Values.frontend.service.port }}
-    targetPort: {{ .Values.frontend.service.targetPort }}
+    targetPort: 8080
+{{- end }}

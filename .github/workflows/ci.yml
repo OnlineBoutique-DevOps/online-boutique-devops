@@ -1,0 +1,116 @@
+name: CI - Build and Push Docker Images to ECR
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'feature/**'
+  pull_request:
+    branches:
+      - main
+      - master
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "532727285947"
+  ECR_REGISTRY: 532727285947.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REPOSITORY_PREFIX: online-boutique
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        service:
+          - adservice
+          - cartservice
+          - checkoutservice
+          - currencyservice
+          - emailservice
+          - frontend
+          - loadgenerator
+          - paymentservice
+          - productcatalogservice
+          - recommendationservice
+          - reviewservice
+          - shippingservice
+          - shoppingassistantservice
+      fail-fast: false
+
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales de AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login en Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Crear variables de entorno
+        run: |
+          echo "ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}" >> $GITHUB_ENV
+          echo "ECR_REPOSITORY=${{ env.ECR_REPOSITORY_PREFIX }}/${{ matrix.service }}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
+          echo "IMAGE_TAG_BRANCH=${{ github.ref_name }}-${{ github.sha }}" >> $GITHUB_ENV
+
+      - name: Construir imagen Docker - ${{ matrix.service }}
+        run: |
+          SERVICE="${{ matrix.service }}"
+          echo "=== Processing service: $SERVICE ==="
+          
+          # Definir ruta del Dockerfile según el servicio
+          case "$SERVICE" in
+            "cartservice")
+              DOCKER_CONTEXT="./src/cartservice/src"
+              ;;
+            "shoppingassistantservice")
+              DOCKER_CONTEXT="./src/shoppingassistantservice"
+              ;;
+            *)
+              DOCKER_CONTEXT="./src/$SERVICE"
+              ;;
+          esac
+          
+          echo "Docker context: $DOCKER_CONTEXT"
+          echo "Files in context:"
+          ls -la "$DOCKER_CONTEXT" || echo "Directory not found"
+          
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest "$DOCKER_CONTEXT"
+
+      - name: Push imagen a ECR - ${{ matrix.service }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Generar resumen de imágenes
+        if: matrix.service == 'frontend'
+        run: |
+          echo "## Imágenes Docker construidas y subidas a ECR" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Repositorio ECR: ${{ env.ECR_REGISTRY }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Servicio | Imagen | Tag |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| adservice | ${{ env.ECR_REGISTRY }}/online-boutique/adservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| cartservice | ${{ env.ECR_REGISTRY }}/online-boutique/cartservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| checkoutservice | ${{ env.ECR_REGISTRY }}/online-boutique/checkoutservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| currencyservice | ${{ env.ECR_REGISTRY }}/online-boutique/currencyservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| emailservice | ${{ env.ECR_REGISTRY }}/online-boutique/emailservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| frontend | ${{ env.ECR_REGISTRY }}/online-boutique/frontend | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| loadgenerator | ${{ env.ECR_REGISTRY }}/online-boutique/loadgenerator | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| paymentservice | ${{ env.ECR_REGISTRY }}/online-boutique/paymentservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| productcatalogservice | ${{ env.ECR_REGISTRY }}/online-boutique/productcatalogservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| recommendationservice | ${{ env.ECR_REGISTRY }}/online-boutique/recommendationservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| reviewservice | ${{ env.ECR_REGISTRY }}/online-boutique/reviewservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| shippingservice | ${{ env.ECR_REGISTRY }}/online-boutique/shippingservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| shoppingassistantservice | ${{ env.ECR_REGISTRY }}/online-boutique/shoppingassistantservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY

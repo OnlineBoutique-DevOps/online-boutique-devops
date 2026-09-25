@@ -5,20 +5,31 @@ on:
     branches:
       - main
       - master
+  workflow_run:
+    workflows: ["CI - Build and Push Docker Images to ECR"]
+    types:
+      - completed
+    branches:
+      - main
+      - master
 
 env:
   AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "532727285947"
   EKS_CLUSTER_NAME: online-boutique-cluster
   HELM_RELEASE_NAME: onlineboutique
   HELM_CHART_PATH: ./helm-chart
+  ECR_REGISTRY: 532727285947.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REPOSITORY_PREFIX: online-boutique
 
 jobs:
   deploy:
     name: Validar y Desplegar a EKS via Helm
     runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'push'
 
     steps:
-      - name: Checkout del código
+      - name: Checkout del codigo
         uses: actions/checkout@v4
 
       - name: Configurar credenciales de AWS
@@ -42,12 +53,34 @@ jobs:
         run: |
           aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
 
+      - name: Login en Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Crear valores personalizados para ECR
+        run: |
+          cat > helm-values-ecr.yaml << EOF
+          images:
+            repository: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_PREFIX }}
+            tag: ${{ github.sha }}
+          frontend:
+            service:
+              type: NodePort
+            externalService: false
+          EOF
+
       - name: Desplegar en EKS con Helm
         run: |
           helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
             --namespace default \
-            --set frontend.externalService=true \
-            --set frontend.serviceType=LoadBalancer \
-            --set service.type=LoadBalancer \
+            -f helm-values-ecr.yaml \
+            --set frontend.externalService=false \
+            --set frontend.service.type=NodePort \
             --force \
             --reset-values
+
+      - name: Verificar despliegue
+        run: |
+          kubectl get pods
+          kubectl get services
+          kubectl get ingress
