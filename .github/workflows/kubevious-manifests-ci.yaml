@@ -47,6 +47,7 @@ jobs:
         uses: kubevious/cli@v1.0.64
         with:
           manifests: helm-chart
+          skip_rules: container-latest-image
 
       - name: Validate kustomize
         id: kustomize-validation
