@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: server
-        image: 414931564967.dkr.ecr.us-east-1.amazonaws.com/online-boutique/reviewservice:latest
+        image: 532727285947.dkr.ecr.us-east-1.amazonaws.com/online-boutique/reviewservice:latest
         ports:
         - containerPort: 8080
         resources:
