@@ -65,8 +65,8 @@ jobs:
             tag: ${{ github.sha }}
           frontend:
             service:
-              type: LoadBalancer
-            externalService: true
+              type: NodePort
+            externalService: false
           EOF
 
       - name: Desplegar en EKS con Helm
@@ -74,9 +74,8 @@ jobs:
           helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
             --namespace default \
             -f helm-values-ecr.yaml \
-            --set frontend.externalService=true \
-            --set frontend.serviceType=LoadBalancer \
-            --set service.type=LoadBalancer \
+            --set frontend.externalService=false \
+            --set frontend.service.type=NodePort \
             --force \
             --reset-values
 
