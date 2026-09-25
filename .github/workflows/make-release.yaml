@@ -18,94 +18,143 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'The release version (e.g., v0.3.5)'
+        description: 'Version de release (vX.Y.Z); requiere CI exitoso para este commit'
         required: true
-        type: string
-      repo_prefix:
-        description: 'The repository prefix for container images'
-        required: false
-        default: 'us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo'
-        type: string
-      project_id:
-        description: 'The Google Cloud Project ID for the release CI'
-        required: false
-        default: 'online-boutique-ci'
         type: string
 
 permissions:
-  contents: write
-  pull-requests: write
-  id-token: write # required for Google Workload Identity Federation OIDC
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "532727285947"
+  AWS_PAGER: ""
+  ECR_REGISTRY: 532727285947.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REPOSITORY_PREFIX: online-boutique
+  RELEASE_VERSION: ${{ inputs.version }}
+  SOURCE_SHA: ${{ github.sha }}
+  SERVICES: >-
+    adservice cartservice checkoutservice currencyservice emailservice
+    frontend loadgenerator paymentservice productcatalogservice
+    recommendationservice reviewservice shippingservice shoppingassistantservice
 
 jobs:
-  build-and-release:
-    runs-on: ubuntu-22.04
+  prepare:
+    name: Validar version y CI de origen
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-        with:
-          # Fetch all history for all tags and branches
-          fetch-depth: 0
-          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
-
-      - name: Validate Version Format
+      - name: Validar version y rama
         run: |
-          if [[ ! "${{ inputs.version }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Error: Version must match format vX.Y.Z (e.g., v1.2.3)"
+          if [[ ! "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::La version debe tener formato vX.Y.Z."
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" != "refs/heads/main" && "$GITHUB_REF" != "refs/heads/master" ]]; then
+            echo "::error::Las releases solo se crean desde main o master."
             exit 1
           fi
 
-      - name: Symlink gsed to sed
+      - name: Comprobar CI exitoso y version no publicada
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          sudo ln -s $(which sed) /usr/local/bin/gsed
+          CI_RUNS=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+            --branch "$GITHUB_REF_NAME" --commit "$SOURCE_SHA" --event push \
+            --status success --limit 1 --json databaseId --jq length)
+          if [[ "$CI_RUNS" == "0" ]]; then
+            echo "::error::Primero debe terminar correctamente el CI de $SOURCE_SHA."
+            exit 1
+          fi
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v3
+          TAGS=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_VERSION")
+          RELEASES=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases")
+          TAG_COUNT=$(jq --arg ref "refs/tags/$RELEASE_VERSION" '[.[] | select(.ref == $ref)] | length' <<< "$TAGS")
+          RELEASE_COUNT=$(jq --arg version "$RELEASE_VERSION" 'flatten | map(select(.tag_name == $version)) | length' <<< "$RELEASES")
+          if [[ "$TAG_COUNT" != "0" || "$RELEASE_COUNT" != "0" ]]; then
+            echo "::error::La version $RELEASE_VERSION ya tiene un tag o una release en GitHub."
+            exit 1
+          fi
+
+  publish-images:
+    name: Versionar imagenes existentes en ECR
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Configurar credenciales de AWS
+        uses: aws-actions/configure-aws-credentials@v6.2.4
         with:
-          # Supports either WIF (recommended) or Service Account key credentials
-          workload_identity_provider: ${{ secrets.RELEASE_GCP_WORKLOAD_IDENTITY_PROVIDER || secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.RELEASE_GCP_SERVICE_ACCOUNT || secrets.GCP_SERVICE_ACCOUNT }}
-          credentials_json: ${{ secrets.RELEASE_GCP_CREDENTIALS_JSON || secrets.GCP_CREDENTIALS_JSON }}
-          # Only fail if none of the auth secrets are set
-          create_credentials_file: true
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
 
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker authentication
+      - name: Verificar todas las imagenes antes de publicar
         run: |
-          REGISTRY_IMAGES=$(echo "${{ inputs.repo_prefix }}" | cut -d'/' -f1)
-          gcloud auth configure-docker "$REGISTRY_IMAGES"
-          gcloud auth configure-docker "us-docker.pkg.dev"
+          read -r -a services <<< "$SERVICES"
+          for service in "${services[@]}"; do
+            repository="$ECR_REPOSITORY_PREFIX/$service"
+            record="$RUNNER_TEMP/release-$service.json"
+            aws ecr batch-get-image --region "$AWS_REGION" --repository-name "$repository" \
+              --image-ids "imageTag=$SOURCE_SHA" "imageTag=$RELEASE_VERSION" \
+              --output json > "$record"
+            source_digest=$(jq -r --arg tag "$SOURCE_SHA" '.images[] | select(.imageId.imageTag == $tag) | .imageId.imageDigest' "$record")
+            release_digest=$(jq -r --arg tag "$RELEASE_VERSION" '.images[] | select(.imageId.imageTag == $tag) | .imageId.imageDigest' "$record")
+            if [[ -z "$source_digest" ]]; then
+              echo "::error::No existe $repository:$SOURCE_SHA. No se publicara la release."
+              exit 1
+            fi
+            if [[ -n "$release_digest" && "$release_digest" != "$source_digest" ]]; then
+              echo "::error::$repository:$RELEASE_VERSION ya identifica otra imagen; no se sobrescribira."
+              exit 1
+            fi
+            jq -j --arg tag "$SOURCE_SHA" '.images[] | select(.imageId.imageTag == $tag) | .imageManifest' "$record" \
+              > "$RUNNER_TEMP/manifest-$service.json"
+          done
 
-      - name: Run Release Script
+      - name: Publicar tags de version sin cambiar latest
+        run: |
+          read -r -a services <<< "$SERVICES"
+          for service in "${services[@]}"; do
+            record="$RUNNER_TEMP/release-$service.json"
+            release_digest=$(jq -r --arg tag "$RELEASE_VERSION" '.images[] | select(.imageId.imageTag == $tag) | .imageId.imageDigest' "$record")
+            if [[ -z "$release_digest" ]]; then
+              aws ecr put-image --region "$AWS_REGION" \
+                --repository-name "$ECR_REPOSITORY_PREFIX/$service" \
+                --image-tag "$RELEASE_VERSION" \
+                --image-manifest "file://$RUNNER_TEMP/manifest-$service.json" > /dev/null
+            fi
+            printf '%s\n' "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/$service:$RELEASE_VERSION" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  create-release:
+    name: Crear borrador de release en GitHub
+    needs: publish-images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Crear borrador sin desplegar en EKS
         env:
-          TAG: ${{ inputs.version }}
-          REPO_PREFIX: ${{ inputs.repo_prefix }}
-          PROJECT_ID: ${{ inputs.project_id }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Configure Git user identity for committing release changes
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          bash ./docs/releasing/make-release.sh
-
-      - name: Create Pull Request
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
-          NEW_VERSION: ${{ inputs.version }}
-          PR_BODY: |
-            This PR releases Online Boutique `${{ inputs.version }}`.
-
-            ## Tasks
-            - [ ] Checks are all passing
-            - [ ] Deploy production environment (https://cymbal-shops.retail.cymbal.dev)
-            - [ ] Merge PR
-            - [ ] Publish release notes
-            - [ ] Announce the release
-        run: |
-          gh pr create \
-            --title "release/${NEW_VERSION}" \
-            --body "$PR_BODY" \
-            --head "release/${NEW_VERSION}" \
-            --base "main"
+          gh release create "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" --title "Online Boutique $RELEASE_VERSION" \
+            --draft --generate-notes
+          {
+            echo "## Release $RELEASE_VERSION"
+            echo "Commit construido por CI: $SOURCE_SHA"
+            echo "Las 13 imagenes tienen el tag $RELEASE_VERSION en ECR."
+            echo "Se creo un borrador en GitHub. No se modifico latest ni se desplego en EKS."
+          } >> "$GITHUB_STEP_SUMMARY"

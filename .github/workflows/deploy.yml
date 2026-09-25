@@ -1,10 +1,6 @@
 name: CI/CD Pipeline - Online Boutique (AWS EKS)
 
 on:
-  push:
-    branches:
-      - main
-      - master
   workflow_run:
     workflows: ["CI - Build and Push Docker Images to ECR"]
     types:
@@ -13,74 +9,124 @@ on:
       - main
       - master
 
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-online-boutique-cluster-default
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
 env:
   AWS_REGION: us-east-1
   AWS_ACCOUNT_ID: "532727285947"
+  AWS_PAGER: ""
   EKS_CLUSTER_NAME: online-boutique-cluster
   HELM_RELEASE_NAME: onlineboutique
   HELM_CHART_PATH: ./helm-chart
+  KUBE_NAMESPACE: default
   ECR_REGISTRY: 532727285947.dkr.ecr.us-east-1.amazonaws.com
   ECR_REPOSITORY_PREFIX: online-boutique
+  IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+  SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
 
 jobs:
+  prepare:
+    name: Verificar origen y vigencia del build
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (github.event.workflow_run.head_branch == 'main' || github.event.workflow_run.head_branch == 'master')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      current: ${{ steps.target.outputs.current }}
+    steps:
+      - name: Comprobar que el commit sigue vigente
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CURRENT_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SOURCE_BRANCH" --jq .sha)
+          if [[ "$CURRENT_SHA" == "$IMAGE_TAG" ]]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Se omite $IMAGE_TAG porque $SOURCE_BRANCH ya apunta a $CURRENT_SHA."
+          fi
+
   deploy:
     name: Validar y Desplegar a EKS via Helm
-    runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'push'
-
+    needs: prepare
+    if: needs.prepare.outputs.current == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - name: Checkout del codigo
-        uses: actions/checkout@v4
+      - name: Checkout del codigo construido por CI
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Instalar y configurar Helm
+        uses: azure/setup-helm@v5.0.1
+        with:
+          version: v3.19.0
+
+      - name: Instalar kubectl compatible con EKS
+        uses: azure/setup-kubectl@v5.1.0
+        with:
+          version: v1.34.9
+
+      - name: Validar Helm Chart (Linting)
+        run: helm lint "$HELM_CHART_PATH" --strict
 
       - name: Configurar credenciales de AWS
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.2.4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
-
-      - name: Instalar y configurar Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: "v3.14.0"
-
-      - name: Validar Helm Chart (Linting)
-        run: |
-          helm lint ${{ env.HELM_CHART_PATH }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
 
       - name: Actualizar Kubeconfig para Amazon EKS
-        run: |
-          aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
-
-      - name: Login en Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Crear valores personalizados para ECR
-        run: |
-          cat > helm-values-ecr.yaml << EOF
-          images:
-            repository: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_PREFIX }}
-            tag: ${{ github.sha }}
-          frontend:
-            service:
-              type: NodePort
-            externalService: false
-          EOF
+        id: kubeconfig
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
 
       - name: Desplegar en EKS con Helm
         run: |
-          helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
-            --namespace default \
-            -f helm-values-ecr.yaml \
-            --set frontend.externalService=false \
-            --set frontend.service.type=NodePort \
-            --force \
-            --reset-values
+          helm upgrade --install "$HELM_RELEASE_NAME" "$HELM_CHART_PATH" \
+            --namespace "$KUBE_NAMESPACE" \
+            --set-string "images.repository=$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX" \
+            --set-string "images.tag=$IMAGE_TAG" \
+            --set-string "reviewservice.image.repository=$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/reviewservice" \
+            --set-string "reviewservice.image.tag=$IMAGE_TAG" \
+            --set "frontend.externalService=false" \
+            --set "frontend.service.type=NodePort" \
+            --reset-values \
+            --wait \
+            --atomic \
+            --timeout 10m
 
       - name: Verificar despliegue
         run: |
-          kubectl get pods
-          kubectl get services
-          kubectl get ingress
+          kubectl rollout status deployment/frontend --namespace "$KUBE_NAMESPACE" --timeout=120s
+          kubectl get deployments --namespace "$KUBE_NAMESPACE"
+          kubectl get pods --namespace "$KUBE_NAMESPACE"
+          kubectl get services --namespace "$KUBE_NAMESPACE"
+          {
+            echo "## Despliegue verificado"
+            echo "Commit: $IMAGE_TAG"
+            echo "Cluster: $EKS_CLUSTER_NAME / namespace: $KUBE_NAMESPACE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Diagnostico si falla el despliegue
+        if: failure() && steps.kubeconfig.outcome == 'success'
+        run: |
+          kubectl get deployments,pods,services --namespace "$KUBE_NAMESPACE"
+          kubectl get events --namespace "$KUBE_NAMESPACE" --field-selector type=Warning --sort-by=.metadata.creationTimestamp

@@ -24,14 +24,29 @@ on:
     paths:
       - 'terraform/**'
       - '.github/workflows/terraform-validate-ci.yaml'
+permissions:
+  contents: read
+concurrency:
+  group: terraform-validate-ci-${{ github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
 jobs:
   terraform-validate-ci:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: hashicorp/setup-terraform@v4
-      - name: terraform init & validate
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: 1.12.2
+          terraform_wrapper: false
+      - name: terraform fmt, init & validate
         run: |
           cd terraform/
-          terraform init -backend=false
-          terraform validate
+          terraform fmt -check -diff -recursive
+          terraform init -backend=false -input=false
+          terraform validate -no-color

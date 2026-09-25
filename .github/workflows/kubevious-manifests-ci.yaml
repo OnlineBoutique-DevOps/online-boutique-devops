@@ -20,20 +20,27 @@ on:
     paths:
       - 'helm-chart/**'
       - 'kustomize/**'
+      - 'kubernetes-manifests/**'
       - '.github/workflows/kubevious-manifests-ci.yaml'
   pull_request:
     paths:
       - 'helm-chart/**'
       - 'kustomize/**'
+      - 'kubernetes-manifests/**'
       - '.github/workflows/kubevious-manifests-ci.yaml'
 permissions:
   contents: read
+concurrency:
+  group: kubevious-manifests-ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   kubevious-manifests-ci:
     runs-on: ubuntu-24.04
-    timeout-minutes: 1
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Validate kubernetes-manifests
         id: kubernetes-manifests-validation

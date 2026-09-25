@@ -11,17 +11,44 @@ on:
       - main
       - master
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
 env:
   AWS_REGION: us-east-1
   AWS_ACCOUNT_ID: "532727285947"
+  AWS_PAGER: ""
   ECR_REGISTRY: 532727285947.dkr.ecr.us-east-1.amazonaws.com
   ECR_REPOSITORY_PREFIX: online-boutique
+  IMAGE_TAG: ${{ github.sha }}
+  PUBLISH_IMAGES: ${{ github.event_name == 'push' && github.repository == 'OnlineBoutique-DevOps/online-boutique-devops' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
 
 jobs:
+  lint-workflows:
+    name: Validate GitHub Actions Workflows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validar workflows y scripts de shell
+        uses: docker://rhysd/actionlint:1.7.12
+
   build-and-push:
     name: Build and Push Docker Images
-    runs-on: ubuntu-latest
-    
+    needs: lint-workflows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
     strategy:
       matrix:
         service:
@@ -40,77 +67,69 @@ jobs:
           - shoppingassistantservice
       fail-fast: false
 
+    env:
+      SERVICE: ${{ matrix.service }}
+
     steps:
       - name: Checkout del código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Configurar credenciales de AWS
-        uses: aws-actions/configure-aws-credentials@v4
+        if: env.PUBLISH_IMAGES == 'true'
+        uses: aws-actions/configure-aws-credentials@v6.2.4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
 
       - name: Login en Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+        if: env.PUBLISH_IMAGES == 'true'
+        uses: aws-actions/amazon-ecr-login@v2.1.7
+        with:
+          registries: ${{ env.AWS_ACCOUNT_ID }}
 
       - name: Crear variables de entorno
-        run: |
-          echo "ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}" >> $GITHUB_ENV
-          echo "ECR_REPOSITORY=${{ env.ECR_REPOSITORY_PREFIX }}/${{ matrix.service }}" >> $GITHUB_ENV
-          echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
-          echo "IMAGE_TAG_BRANCH=${{ github.ref_name }}-${{ github.sha }}" >> $GITHUB_ENV
+        run: echo "ECR_REPOSITORY=$ECR_REPOSITORY_PREFIX/$SERVICE" >> "$GITHUB_ENV"
 
       - name: Construir imagen Docker - ${{ matrix.service }}
         run: |
-          SERVICE="${{ matrix.service }}"
-          echo "=== Processing service: $SERVICE ==="
-          
           # Definir ruta del Dockerfile según el servicio
           case "$SERVICE" in
             "cartservice")
               DOCKER_CONTEXT="./src/cartservice/src"
               ;;
-            "shoppingassistantservice")
-              DOCKER_CONTEXT="./src/shoppingassistantservice"
-              ;;
             *)
               DOCKER_CONTEXT="./src/$SERVICE"
               ;;
           esac
-          
+
+          test -f "$DOCKER_CONTEXT/Dockerfile"
           echo "Docker context: $DOCKER_CONTEXT"
-          echo "Files in context:"
-          ls -la "$DOCKER_CONTEXT" || echo "Directory not found"
-          
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest "$DOCKER_CONTEXT"
+          docker build \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            "$DOCKER_CONTEXT"
 
       - name: Push imagen a ECR - ${{ matrix.service }}
+        if: env.PUBLISH_IMAGES == 'true'
         run: |
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY"
+          docker push "$IMAGE:$IMAGE_TAG"
+          docker tag "$IMAGE:$IMAGE_TAG" "$IMAGE:latest"
+          docker push "$IMAGE:latest"
 
       - name: Generar resumen de imágenes
-        if: matrix.service == 'frontend'
         run: |
-          echo "## Imágenes Docker construidas y subidas a ECR" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Repositorio ECR: ${{ env.ECR_REGISTRY }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Servicio | Imagen | Tag |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|--------|-----|" >> $GITHUB_STEP_SUMMARY
-          echo "| adservice | ${{ env.ECR_REGISTRY }}/online-boutique/adservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| cartservice | ${{ env.ECR_REGISTRY }}/online-boutique/cartservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| checkoutservice | ${{ env.ECR_REGISTRY }}/online-boutique/checkoutservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| currencyservice | ${{ env.ECR_REGISTRY }}/online-boutique/currencyservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| emailservice | ${{ env.ECR_REGISTRY }}/online-boutique/emailservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| frontend | ${{ env.ECR_REGISTRY }}/online-boutique/frontend | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| loadgenerator | ${{ env.ECR_REGISTRY }}/online-boutique/loadgenerator | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| paymentservice | ${{ env.ECR_REGISTRY }}/online-boutique/paymentservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| productcatalogservice | ${{ env.ECR_REGISTRY }}/online-boutique/productcatalogservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| recommendationservice | ${{ env.ECR_REGISTRY }}/online-boutique/recommendationservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| reviewservice | ${{ env.ECR_REGISTRY }}/online-boutique/reviewservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| shippingservice | ${{ env.ECR_REGISTRY }}/online-boutique/shippingservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| shoppingassistantservice | ${{ env.ECR_REGISTRY }}/online-boutique/shoppingassistantservice | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## $SERVICE"
+            echo "Imagen construida: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+            if [[ "$PUBLISH_IMAGES" == "true" ]]; then
+              echo "Publicada en ECR con tags $IMAGE_TAG y latest."
+            else
+              echo "Construcción validada sin credenciales AWS ni publicación en ECR."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

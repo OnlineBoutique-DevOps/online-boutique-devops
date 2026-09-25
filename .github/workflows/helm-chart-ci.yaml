@@ -20,15 +20,34 @@ on:
     paths:
       - 'helm-chart/**'
       - '.github/workflows/helm-chart-ci.yaml'
+      - '.github/workflows/deploy.yml'
   pull_request:
     paths:
       - 'helm-chart/**'
       - '.github/workflows/helm-chart-ci.yaml'
+      - '.github/workflows/deploy.yml'
+permissions:
+  contents: read
+concurrency:
+  group: helm-chart-ci-${{ github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
 jobs:
   helm-chart-ci:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@v5.0.1
+        with:
+          version: v3.19.0
+      - uses: azure/setup-kubectl@v5.1.0
+        with:
+          version: v1.34.9
       - name: helm lint
         run: |
           cd helm-chart/
@@ -37,20 +56,28 @@ jobs:
         run: |
           cd helm-chart/
           helm template . > helm-template.yaml
-          cat helm-template.yaml 
-          kustomize create --resources helm-template.yaml
-          kustomize build .
+          printf 'resources:\n- helm-template.yaml\n' > kustomization.yaml
+          kubectl kustomize . > /dev/null
+      - name: helm template ECR NodePort
+        run: |
+          cd helm-chart/
+          helm template . \
+            --set-string "images.tag=$GITHUB_SHA" \
+            --set-string "reviewservice.image.tag=$GITHUB_SHA" \
+            --set frontend.externalService=false \
+            --set frontend.service.type=NodePort \
+            -n onlineboutique \
+            > helm-template.yaml
+          kubectl kustomize . > /dev/null
       - name: helm template grpc health probes
         run: |
           # Test related to https://medium.com/google-cloud/b5bd26253a4c
           cd helm-chart/
-          SPANNER_CONNECTION_STRING=projects/PROJECT_ID/instances/SPANNER_INSTANCE_NAME/databases/SPANNER_DATABASE_NAME
           helm template . \
             --set nativeGrpcHealthCheck=true \
             -n onlineboutique \
             > helm-template.yaml
-          cat helm-template.yaml
-          kustomize build .
+          kubectl kustomize . > /dev/null
       - name: helm template spanner
         run: |
           # Test related to https://medium.com/google-cloud/f7248e077339
@@ -60,14 +87,13 @@ jobs:
           helm template . \
             --set cartDatabase.inClusterRedis.create=false \
             --set cartDatabase.type=spanner \
-            --set cartDatabase.connectionString=${SPANNER_CONNECTION_STRING} \
+            --set "cartDatabase.connectionString=$SPANNER_CONNECTION_STRING" \
             --set serviceAccounts.create=true \
             --set serviceAccounts.annotationsOnlyForCartservice=true \
-            --set "serviceAccounts.annotations.iam\.gke\.io/gcp-service-account=${SPANNER_DB_USER_GSA_ID}" \
+            --set "serviceAccounts.annotations.iam\.gke\.io/gcp-service-account=$SPANNER_DB_USER_GSA_ID" \
             -n onlineboutique \
             > helm-template.yaml
-          cat helm-template.yaml
-          kustomize build .
+          kubectl kustomize . > /dev/null
       - name: helm template asm
         run: |
           # Test related to https://medium.com/google-cloud/246119e46d53
@@ -85,8 +111,7 @@ jobs:
             --set frontend.virtualService.gateway.labelValue=ingressgateway \
             -n onlineboutique \
             > helm-template.yaml
-          cat helm-template.yaml
-          kustomize build .
+          kubectl kustomize . > /dev/null
       - name: helm template memorystore istio tls origination
         run: |
           # Test related to https://medium.com/google-cloud/64b71969318d
@@ -96,12 +121,11 @@ jobs:
           REDIS_CERT=dsjfgkldsjflkdsjflksdajfkldsjkfljsdaklfjaskjfakdsjfaklsdjflskadjfklasjfkls
           helm template . \
             --set cartDatabase.inClusterRedis.create=false \
-            --set cartDatabase.connectionString=${REDIS_IP}:${REDIS_PORT} \
+            --set "cartDatabase.connectionString=$REDIS_IP:$REDIS_PORT" \
             --set cartDatabase.externalRedisTlsOrigination.enable=true \
-            --set cartDatabase.externalRedisTlsOrigination.certificate="${REDIS_CERT}" \
-            --set cartDatabase.externalRedisTlsOrigination.endpointAddress=${REDIS_IP} \
-            --set cartDatabase.externalRedisTlsOrigination.endpointPort=${REDIS_PORT} \
+            --set "cartDatabase.externalRedisTlsOrigination.certificate=$REDIS_CERT" \
+            --set "cartDatabase.externalRedisTlsOrigination.endpointAddress=$REDIS_IP" \
+            --set "cartDatabase.externalRedisTlsOrigination.endpointPort=$REDIS_PORT" \
             -n onlineboutique \
             > helm-template.yaml
-          cat helm-template.yaml
-          kustomize build .
+          kubectl kustomize . > /dev/null

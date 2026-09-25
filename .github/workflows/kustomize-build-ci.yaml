@@ -24,22 +24,34 @@ on:
     paths:
       - 'kustomize/**'
       - '.github/workflows/kustomize-build-ci.yaml'
+permissions:
+  contents: read
+concurrency:
+  group: kustomize-build-ci-${{ github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
 jobs:
   kustomize-build-ci:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-kubectl@v5.1.0
+        with:
+          version: v1.34.9
       - name: kustomize build base
         run: |
           cd kustomize/
-          kubectl kustomize .
+          kubectl kustomize . > /dev/null
       # Build the different combinations of Kustomize components found in kustomize/tests.
       - name: kustomize build tests
         run: |
           cd kustomize/tests
-          KUSTOMIZE_TESTS_SUBFOLDERS=$(ls -d */)
-          for test in $KUSTOMIZE_TESTS_SUBFOLDERS;
-          do
-              echo "## kustomize build for " + $test
-              kustomize build $test
+          for test in ./*/; do
+            echo "## kustomize build for $test"
+            kubectl kustomize "$test" > /dev/null
           done
