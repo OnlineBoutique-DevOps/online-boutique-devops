@@ -1,179 +1,112 @@
-# 1. Crear red VPC para AWS (TEMPORALMENTE COMENTADO - PROBLEMAS IAM EN AWS ACADEMY)
-# NOTA: Descomentar cuando se resuelvan los permisos IAM para EKS
-# module "vpc" {
-#   source  = "terraform-aws-modules/vpc/aws"
-#   version = "5.0.0"
+# Infraestructura de Online Boutique en AWS (cuenta 532727285947, us-east-1)
 #
-#   name            = "online-boutique-vpc"
-#   cidr            = "10.0.0.0/16"
-#   azs             = ["${var.aws_region}a", "${var.aws_region}b"]
-#   public_subnets  = ["10.0.1.0/24", "10.0.2.0/24"]
-#   private_subnets = ["10.0.10.0/24", "10.0.20.0/24"]
-#
-#   enable_nat_gateway = true
-#   single_nat_gateway = true
-#
-#   # Tags requeridos para la integración de Kubernetes y Load Balancers
-#   public_subnet_tags = {
-#     "kubernetes.io/cluster/online-boutique-cluster" = "shared"
-#     "kubernetes.io/role/elb"                        = "1"
-#   }
-#
-#   private_subnet_tags = {
-#     "kubernetes.io/cluster/online-boutique-cluster" = "shared"
-#     "kubernetes.io/role/internal-elb"               = "1"
-#   }
-# }
+# NOTA SOBRE AWS ACADEMY: el rol de laboratorio (voclabs) no permite crear
+# roles IAM ni proveedores OIDC. Por eso los roles del clúster y de los nodos
+# se referencian como variables (fueron creados por el laboratorio) en lugar
+# de declararse aquí. La VPC utilizada es la VPC por defecto de la cuenta.
 
-# 2. Crear Clúster de Kubernetes (AWS EKS) - TEMPORALMENTE COMENTADO - PROBLEMAS IAM EN AWS ACADEMY
-# NOTA: Descomentar cuando se resuelvan los permisos IAM para EKS
-# module "eks" {
-#   source  = "terraform-aws-modules/eks/aws"
-#   version = "18.31.2"
-#
-#   cluster_name    = "online-boutique-cluster"
-#   cluster_version = "1.31" # Alineado con la versión real del clúster desplegado
-#
-#   vpc_id                         = module.vpc.vpc_id
-#   subnet_ids                     = module.vpc.private_subnets
-#   cluster_endpoint_public_access = true
-#   create_cloudwatch_log_group    = false
-#
-#   # Desactivar OIDC/IRSA para evitar el bloqueo de iam:CreateOpenIDConnectProvider en Vocareum
-#   enable_irsa = false
-#
-#   # Usar el rol voclabs existente para el plano de control (Cluster)
-#   create_iam_role = false
-#   iam_role_arn    = "arn:aws:iam::532727285947:role/voclabs"
-#
-#   # Desactivar la gestión del ConfigMap aws-auth
-#   manage_aws_auth_configmap = false
-#
-#   eks_managed_node_groups = {
-#     nodes = {
-#       min_size     = 2
-#       max_size     = 4
-#       desired_size = 2
-#
-#       instance_types = ["t3.medium"]
-#       ami_type       = "AL2_x86_64" # Alineado con la AMI original desplegado
-#
-#       # Usar el rol voclabs existente para los nodos trabajadores
-#       create_iam_role = false
-#       iam_role_arn    = "arn:aws:iam::532727285947:role/voclabs"
-#     }
-#   }
-# }
+# 1. Red: VPC por defecto del laboratorio y sus subredes
+data "aws_vpc" "lab" {
+  id = var.vpc_id
+}
 
-# 3. Registro de imágenes (Amazon ECR) para todos los microservicios
-resource "aws_ecr_repository" "review_service" {
-  name                 = "online-boutique/reviewservice"
+data "aws_subnets" "lab" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.lab.id]
+  }
+  filter {
+    name   = "subnet-id"
+    values = var.subnet_ids
+  }
+}
+
+# 2. Clúster de Kubernetes (Amazon EKS en modo Auto)
+# EKS Auto Mode delega a AWS la creación y ciclo de vida de las instancias EC2
+# de los nodos (node pools "general-purpose" y "system"). Por eso no hay un
+# recurso aws_instance ni un grupo de nodos administrado en este código.
+resource "aws_eks_cluster" "online_boutique" {
+  name     = var.name
+  version  = var.kubernetes_version
+  role_arn = var.cluster_role_arn
+
+  access_config {
+    authentication_mode                         = "API"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
+  # Requerido por EKS Auto Mode: los add-ons básicos los gestiona AWS.
+  bootstrap_self_managed_addons = false
+
+  compute_config {
+    enabled       = true
+    node_pools    = ["general-purpose", "system"]
+    node_role_arn = var.node_role_arn
+  }
+
+  kubernetes_network_config {
+    ip_family         = "ipv4"
+    service_ipv4_cidr = "10.100.0.0/16"
+    elastic_load_balancing {
+      enabled = true
+    }
+  }
+
+  storage_config {
+    block_storage {
+      enabled = true
+    }
+  }
+
+  vpc_config {
+    subnet_ids              = data.aws_subnets.lab.ids
+    endpoint_private_access = true
+    endpoint_public_access  = true
+    public_access_cidrs     = ["0.0.0.0/0"]
+  }
+
+  enabled_cluster_log_types = [
+    "api",
+    "audit",
+    "authenticator",
+    "controllerManager",
+    "scheduler",
+  ]
+
+  upgrade_policy {
+    support_type = "STANDARD"
+  }
+
+  zonal_shift_config {
+    enabled = true
+  }
+}
+
+# Add-on de métricas instalado en el clúster (usado por kubectl top / HPA)
+resource "aws_eks_addon" "metrics_server" {
+  cluster_name = aws_eks_cluster.online_boutique.name
+  addon_name   = "metrics-server"
+}
+
+# 3. Registro de imágenes (Amazon ECR): un repositorio por microservicio.
+# La lista se centraliza en var.microservices y coincide con la matriz del
+# workflow .github/workflows/ci.yml.
+resource "aws_ecr_repository" "microservice" {
+  for_each = toset(var.microservices)
+
+  name                 = "${var.ecr_repository_prefix}/${each.key}"
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
   }
-}
 
-resource "aws_ecr_repository" "ad_service" {
-  name                 = "online-boutique/adservice"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
+  encryption_configuration {
+    encryption_type = "AES256"
   }
 }
 
-resource "aws_ecr_repository" "cart_service" {
-  name                 = "online-boutique/cartservice"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_repository" "checkout_service" {
-  name                 = "online-boutique/checkoutservice"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_repository" "currency_service" {
-  name                 = "online-boutique/currencyservice"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_repository" "email_service" {
-  name                 = "online-boutique/emailservice"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_repository" "frontend" {
-  name                 = "online-boutique/frontend"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_repository" "load_generator" {
-  name                 = "online-boutique/loadgenerator"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_repository" "payment_service" {
-  name                 = "online-boutique/paymentservice"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_repository" "product_catalog_service" {
-  name                 = "online-boutique/productcatalogservice"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_repository" "recommendation_service" {
-  name                 = "online-boutique/recommendationservice"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_repository" "shipping_service" {
-  name                 = "online-boutique/shippingservice"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-# 4. Recursos para Backend Remoto (DynamoDB para State Locking)
-# NOTA: La tabla DynamoDB ya fue creada manualmente para el backend de Terraform
-# No necesitamos crearla aquí para evitar conflictos
+# 4. Backend remoto (S3 + DynamoDB para bloqueo de estado)
+# Declarados en providers.tf. El bucket y la tabla se crearon manualmente
+# antes de habilitar el backend; no se declaran aquí para evitar la
+# dependencia circular de que Terraform cree el sitio donde guarda su estado.
