@@ -8,7 +8,7 @@
 
 ---
 
-## 1. Objetivo
+## 1. Objetivo y requisitos
 
 Implementar un pipeline completo de DevOps para desplegar la aplicación de
 microservicios **Online Boutique** en Amazon Web Services (AWS), siguiendo el
@@ -17,6 +17,14 @@ flujo:
 ```
 Código → GitHub → GitHub Actions → Docker → Amazon ECR → Kubernetes/EKS → Helm → Aplicación funcionando en AWS
 ```
+
+### Cumplimiento de los requisitos
+
+| # | Requisito | Cumplimiento | Sección |
+|---|-----------|--------------|---------|
+| 1 | Construir la infraestructura utilizando **Terraform** | Clúster EKS Auto Mode, add-on metrics-server y 13 repositorios ECR gestionados por Terraform con estado remoto en S3/DynamoDB. `terraform plan` → **"No changes. Your infrastructure matches the configuration."** | 4.4 |
+| 2 | **CI:** construir imágenes Docker e integrarlas a un container registry en la nube | Workflow `ci.yml` construye 13 imágenes en paralelo y las publica en **Amazon ECR** etiquetadas con el SHA del commit y `latest` | 4.2, 4.3 |
+| 3 | **CD:** desplegar con cada cambio en `main` las imágenes del CI en Kubernetes mediante un **Helm Chart personalizado** | Workflow `deploy.yml` se dispara al terminar CI en `main` y ejecuta `helm upgrade --install` del chart `helm-chart/` en EKS con el SHA exacto construido; rollback automático si falla | 4.6, 4.7 |
 
 ---
 
@@ -35,7 +43,7 @@ Código → GitHub → GitHub Actions → Docker → Amazon ECR → Kubernetes/E
                          │  upgrade   │   despliegue  │  Cluster   │
                          └────────────┘               │  (K8s 1.34)│
                                                       └────────────┘
-Infraestructura como código: Terraform (VPC/EKS/ECR) + backend S3/DynamoDB
+Infraestructura como código: Terraform (EKS Auto Mode + ECR) + backend S3/DynamoDB
 ```
 
 ### Servicios desplegados (13 microservicios + bases de datos)
@@ -52,10 +60,11 @@ shoppingassistantservice + redis-cart + postgres-review-db
 | Herramienta | Uso |
 |-------------|-----|
 | Git + GitHub | Control de versiones y repositorio central |
-| GitHub Actions | Pipelines de CI/CD (5 workflows) |
+| GitHub Actions | Pipelines de CI/CD (7 workflows: CI, CD, release manual y 4 de validación) |
 | Docker | Construcción de imágenes de los microservicios |
 | Amazon ECR | Registro privado de imágenes de contenedor |
-| Terraform | Infraestructura como código (ECR, backend S3 + DynamoDB) |
+| Terraform | Infraestructura como código (EKS, add-ons, ECR; backend S3 + DynamoDB) |
+| actionlint + ShellCheck | Validación estática de los workflows antes de cada build |
 | Amazon EKS | Cluster de Kubernetes administrado (v1.34, modo Auto) |
 | Helm | Empaquetado y despliegue de la aplicación |
 | kubectl | Administración y verificación del cluster |
@@ -67,28 +76,35 @@ shoppingassistantservice + redis-cart + postgres-review-db
 ### 4.1 Repositorio en GitHub
 
 - **URL:** https://github.com/OnlineBoutique-DevOps/online-boutique-devops
-- **Rama de trabajo:** `feature/devops-cicd-implementation`
-- **Rama principal:** `main`
-- **Pull Request:** #2 — mergeado el 25/09/2026 con todos los checks en verde
+- **Rama principal:** `main` (rama por defecto; cada push dispara CI → CD)
+- **Pull Request:** #2 — rama `feature/devops-cicd-implementation`, mergeado el
+  25/09/2026 con todos los checks en verde
+- **Commits finales de la entrega:** `7021a9b8` (corrección de workflows) y
+  `e63b5325` (Terraform gestionando EKS)
 
 **Estructura relevante del repositorio:**
 
 ```
 microservices-demo/
-├── .github/workflows/       # Pipelines CI/CD
-│   ├── ci.yml               # Build & Push de imágenes a ECR
-│   ├── deploy.yml           # Despliegue automático a EKS
-│   ├── terraform-validate-ci.yaml
-│   ├── helm-chart-ci.yaml
-│   └── kubevious-manifests-ci.yaml
-├── helm-chart/              # Chart personalizado de la aplicación
+├── .github/workflows/
+│   ├── ci.yml                      # CI: actionlint + build & push de 13 imágenes a ECR
+│   ├── deploy.yml                  # CD: helm upgrade en EKS tras CI exitoso en main
+│   ├── make-release.yaml           # Release manual: versiona imágenes en ECR (vX.Y.Z)
+│   ├── terraform-validate-ci.yaml  # terraform fmt / init / validate
+│   ├── helm-chart-ci.yaml          # helm lint --strict + render de 6 variantes
+│   ├── kubevious-manifests-ci.yaml # Reglas de buenas prácticas Kubernetes
+│   └── kustomize-build-ci.yaml     # Validación de overlays kustomize
+├── helm-chart/                     # Chart personalizado de la aplicación
+│   ├── Chart.yaml                  # onlineboutique 0.11.0
 │   ├── values.yaml
-│   └── templates/           # 14 microservicios + recursos
-├── terraform/               # Infraestructura como código
-│   ├── main.tf              # Repositorios ECR
-│   ├── providers.tf         # Backend S3 + DynamoDB
-│   └── output.tf
-└── src/                     # Código fuente de los microservicios
+│   └── templates/                  # 14 microservicios + ConfigMap + Secret
+├── terraform/                      # Infraestructura como código
+│   ├── main.tf                     # aws_eks_cluster (Auto Mode), aws_eks_addon, aws_ecr_repository
+│   ├── variables.tf                # Región, roles IAM, subredes, lista de microservicios
+│   ├── output.tf                   # Endpoint, SG del clúster, URLs ECR
+│   ├── moved.tf                    # Renombre seguro de recursos en el estado
+│   └── providers.tf                # Provider AWS + backend S3/DynamoDB
+└── src/                            # Código fuente de los 13 microservicios
 ```
 
 > 📷 **CAPTURA 1:** Vista del repositorio en GitHub mostrando la estructura de carpetas.
@@ -424,4 +440,4 @@ helm uninstall onlineboutique
 # Los repositorios ECR persisten; para borrarlos:
 aws ecr delete-repository --repository-name online-boutique/<servicio> --force
 # (repetir por cada uno de los 13, o terraform destroy con credenciales válidas)
-```
+```1111111111111111
