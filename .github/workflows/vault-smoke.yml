@@ -1,0 +1,37 @@
+name: Vault OIDC smoke test
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  read-vault-probe:
+    # Register a trusted runner with this label only after it can reach Vault
+    # over TLS. GitHub-hosted runners cannot reach a private EC2 endpoint.
+    runs-on: [self-hosted, vault-network]
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+    steps:
+      - name: Read a harmless probe from Vault using GitHub OIDC
+        id: vault
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4.0.0
+        with:
+          url: ${{ vars.VAULT_ADDR }}
+          caCertificate: ${{ vars.VAULT_CA_CERT }}
+          method: jwt
+          role: github-ci-probe
+          secrets: |
+            kv/data/ci/probe status | VAULT_PROBE
+
+      - name: Assert access without printing fetched data
+        env:
+          VAULT_PROBE: ${{ steps.vault.outputs.VAULT_PROBE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$VAULT_PROBE" = "ready"
+          echo "Vault OIDC read check passed."
