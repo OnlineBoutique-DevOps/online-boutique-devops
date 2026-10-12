@@ -33,6 +33,33 @@ Se ejecutó `terraform fmt` con Terraform 1.16.5, `terraform fmt -check` y `terr
 
 No se ejecutó `terraform plan`, porque los data sources requieren consultar AWS. Por inspección, el módulo administra un Security Group, una EC2, un volumen EBS y su attachment; no declara recursos de EKS/ECR ni cambia recursos existentes. El plan real sigue siendo necesario antes de cualquier `apply`. El estado de este módulo será local e independiente; hay que protegerlo como dato sensible. El volumen `prevent_destroy` reduce el riesgo de borrado accidental, pero no sustituye respaldos.
 
+### Respaldo y recuperación de Raft
+
+Vault de un solo nodo es un punto único de fallo. El EBS persistente protege contra la terminación accidental de EC2, pero no contra pérdida/corrupción del volumen. Un snapshot Raft contiene datos confidenciales cifrados por Vault; guárdalo fuera del repositorio, en una ubicación con acceso limitado y cifrado/retención aprobados. El token operador y las shares de unseal se custodian por separado. Este procedimiento está documentado, pero aún no se ha probado restaurando un clúster.
+
+Con Vault inicializado y desprecintado, una sesión autenticada con permisos administrativos para snapshots y una ruta local aprobada fuera del checkout:
+
+```sh
+umask 077
+: "${VAULT_BACKUP_DIR:?Define un directorio de respaldo seguro fuera del repositorio}"
+mkdir -p "$VAULT_BACKUP_DIR"
+chmod 700 "$VAULT_BACKUP_DIR"
+repo_root="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
+backup_dir="$(cd "$VAULT_BACKUP_DIR" && pwd -P)"
+case "$backup_dir/" in
+  "$repo_root/"*) echo "El respaldo debe quedar fuera del repositorio." >&2; exit 2 ;;
+esac
+snapshot="$VAULT_BACKUP_DIR/vault-$(date -u +%Y%m%dT%H%M%SZ).snap"
+test ! -e "$snapshot"
+vault operator raft snapshot save "$snapshot"
+chmod 600 "$snapshot"
+vault operator raft snapshot inspect "$snapshot"
+```
+
+Transfiere el archivo a almacenamiento externo cifrado y con acceso restringido, confirma que la copia se puede leer/verificar y aplica una política de retención; no lo añadas al repositorio ni a artefactos CI. Conserva junto a la copia (en un gestor aprobado, no en el mismo directorio) versión/configuración de Vault y la referencia a custodios de las shares originales. `snapshot inspect` verifica que el archivo es legible, pero no demuestra una restauración correcta. Referencias oficiales: [guardar snapshot](https://developer.hashicorp.com/vault/docs/sysadmin/snapshots/save) y [restaurar snapshot](https://developer.hashicorp.com/vault/docs/sysadmin/snapshots/restore).
+
+La recuperación debe ensayarse primero en un host y red aislados. Aprovisiona Vault con versión/configuración compatibles y almacenamiento vacío; inicializa esa instancia aislada y desprecíntala con su material temporal para poder autenticarse. Copia allí el snapshot aprobado y restaura con `vault operator raft snapshot restore -force /ruta/segura/vault-<fecha>.snap` solo si la instancia destino fue inicializada con nuevas shares, como requiere una restauración forzada. **Este comando reemplaza el estado de Vault destino; no ejecutarlo en el servicio activo como experimento.** Espera la finalización de la recuperación en logs antes de operar; tras la restauración, desprecinta con las shares originales correspondientes al snapshot y valida estado, mounts, políticas y una lectura canary sin mostrar datos. El token temporal de la instancia de recuperación ya no representa el estado restaurado. Practicar esta secuencia y medir RPO/RTO sigue pendiente; un snapshot no probado no es evidencia de recuperación.
+
 ## Fase 2: Ansible
 
 Implementado en `ansible/`: `site.yml`, rol `vault_server`, instalación desde el repositorio RPM oficial con Vault fijado a 1.21.4, servicio systemd, listener TLS obligatorio, UI habilitada y almacenamiento integrado Raft sobre el volumen EBS montado. El rol falla cerrado si falta TLS real, conserva host key checking, no registra la clave privada (`no_log`) y evita reformatear un volumen que tenga un filesystem distinto de `VAULT_DATA`. La colección externa `ansible.posix` está fijada en 1.6.2 en `ansible/requirements.yml`; `mount` pertenece a esa colección y no a `ansible-core`.
@@ -56,6 +83,8 @@ La inicialización captura el JSON de shares/token directamente a GPG cifrado fu
 Tras importar credenciales válidas desde una fuente aprobada, configura variables de entorno `VAULT_ADDR`, `VAULT_CACERT` y `VAULT_TOKEN` usando un token operador corto; no pegues su valor en comandos guardados en el historial. Ejecuta los scripts solo contra el Vault correcto después de comprobar `vault status`. Inicializa el canary no sensible `kv/ci/probe` con `status=ready`. Los valores de aplicación se migran manualmente desde el gestor de credenciales, nunca desde `values.yaml` por automatización ciega.
 
 `.github/workflows/vault-smoke.yml` es `workflow_dispatch`, restringe permisos a `contents: read` e `id-token: write`, usa `hashicorp/vault-action` v4.0.0 fijada al SHA íntegro del release firmado y no imprime la respuesta recuperada. La audience configurada en Vault (`https://github.com/OnlineBoutique-DevOps`) coincide con el valor predeterminado documentado por la acción; cambiar `jwtGithubAudience` exigiría actualizar `bound_audiences`. Requiere variables GitHub `VAULT_ADDR` y `VAULT_CA_CERT`, rol Vault configurado y runner confiable con etiqueta `vault-network`; al usar Node 24, ese runner debe tener una versión de Actions Runner que lo soporte. El workflow CD conserva AWS Academy temporal y ahora lee `VAULT_SECRETS_ENABLED` desde GitHub Variables, con valor predeterminado `false`; no se activó.
+
+La autenticación GitHub→Vault es independiente de AWS. Los workflows existentes de CI/CD obtienen `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` y `AWS_SESSION_TOKEN` de GitHub Actions Secrets, cargados por el operador desde las credenciales temporales de AWS Academy Learner Lab. El session token expira con la sesión del laboratorio; el operador debe renovar los tres valores en GitHub Secrets al iniciar una sesión nueva y antes de volver a ejecutar jobs AWS. La federación directa GitHub→AWS no está configurada porque no se han confirmado permisos para crear IAM/OIDC en Learner Lab. No se guarda la credencial AWS en Vault ni se supone que el OIDC de Vault otorgue permisos AWS. Esta es una solución de transición y su operación real no se ha verificado en esta revisión.
 
 ## Fase 4: Kubernetes y pruebas
 
@@ -108,6 +137,27 @@ No se adjuntan capturas ficticias ni resultados de ejecución inexistentes.
 | 2. UI accesible con seguridad | HCL habilita UI y TLS; no hay servidor desplegado, DNS, ruta ni captura verificada. |
 | 3. Portafolio de evidencias | Runbook y diagrama están en el repositorio; faltan evidencias capturadas durante ejecuciones reales. |
 | 4. Repositorio/README/Ansible/Vault/CI | README enlaza el runbook y las validaciones locales descritas arriba pasaron; idempotencia remota, workflow real, VSO y despliegue EKS siguen pendientes. |
+
+### Matriz de requisitos y brechas
+
+Los estados describen cada evidencia por separado; una validación local no convierte en probado el despliegue real.
+
+| Requisito | Artefacto/evidencia actual | Estado | Brecha restante |
+|---|---|---|---|
+| Terraform Vault aislado de EKS/ECR | `terraform/vault/`; `fmt`, `init -backend=false`, `validate` locales | IMPLEMENTADO, SIN VALIDAR en AWS | Plan que consulte AWS y confirme únicamente recursos Vault; requiere autorización y credenciales del Lab. |
+| Red Vault limitada, TLS y UI | Terraform SG, Ansible HCL TLS/UI | IMPLEMENTADO, SIN VALIDAR | Confirmar subnet, rutas, SG de origen y acceso TLS/UI real. |
+| Costo, punto único de fallo y recuperación | Diseño y sección de snapshot de este runbook | IMPLEMENTADO, SIN VALIDAR | Presupuesto real; restauración aislada y RPO/RTO no probados. |
+| Ansible modular, dependencias fijadas y sintaxis | Rol `vault_server`, `ansible/requirements.yml`; syntax-check local pasado | COMPLETADO Y PROBADO (sintaxis local) | Primera/segunda corrida en EC2, idempotencia, permisos efectivos y estado systemd pendientes. |
+| Vault TLS, Raft, mlock y mount EBS | Rol Ansible y `vault.hcl.j2` | IMPLEMENTADO, SIN VALIDAR en host | Probar contra EC2 y dispositivo EBS verificado. |
+| Inicialización, unseal y KV v2 | `scripts/vault/initialize-encrypted.sh`; smoke local KV2 | COMPLETADO Y PROBADO (smoke local) | Bootstrap real, rotación del token inicial y proceso de custodios pendientes. |
+| ACL de mínimo privilegio y fallo sellado | `vault/policies/`; `tests/vault/local-security-smoke.sh` | COMPLETADO Y PROBADO (Vault local) | Repetir evidencias sanitizadas en instancia real. |
+| GitHub JWT limitado a repo/ref/workflow | `configure-github-auth.sh`, `vault-smoke.yml` | IMPLEMENTADO, SIN VALIDAR | Runner con red, variables CA/URL, rol configurado y ejecución Actions real pendientes. |
+| Renovación de credenciales AWS CI | Secrets AWS Academy existentes; mecanismo descrito arriba | IMPLEMENTADO, SIN VALIDAR operativamente | Confirmar expiración/renovación en una ejecución real; OIDC AWS depende de permisos IAM no confirmados. |
+| VSO CRDs, VaultAuth y VaultStaticSecret | `kubernetes/vault-secrets-operator/` con versiones preparadas | IMPLEMENTADO, SIN VALIDAR | Instalar chart/CRDs y validar esquema/compatibilidad en el clúster autorizado. |
+| Handoff Helm→VSO sin borrar el Secret | Valores predeterminados seguros y etapas `preserve`/`enabled` | COMPLETADO Y PROBADO (render local) | Handoff, sincronización, rollout y reversión no probados en EKS. |
+| Comportamiento de VSO ante Vault sellado/inaccesible | Recuperación descrita; smoke local cubre rechazo sellado de Vault CLI | IMPLEMENTADO, SIN VALIDAR en VSO | Simular fallo con VSO real y registrar condición/reintento/Secret retenido sin exponer datos. |
+| Evidencias sanitizadas para evaluación | Runbook, diagrama y resultados locales | IMPLEMENTADO, SIN VALIDAR como portafolio final | Capturas/logs reales de UI, Ansible, GitHub Actions, VSO y workloads faltantes. |
+| Valores existentes de `helm-chart/values.yaml` | Inventariados, valores no reproducidos | BLOQUEADO | Confirmar si son placeholders o credenciales utilizadas; coordinar rotación antes de migrar. |
 
 ## Riesgos y bloqueos manuales
 
