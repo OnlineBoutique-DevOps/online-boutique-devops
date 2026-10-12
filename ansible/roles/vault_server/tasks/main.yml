@@ -1,0 +1,154 @@
+---
+- name: Require a real Vault DNS name before configuration
+  ansible.builtin.assert:
+    that:
+      - vault_api_addr is match('^https://[^/]+:8200$')
+      - "'example.invalid' not in vault_api_addr"
+    fail_msg: Set vault_api_addr to the real TLS DNS name before provisioning.
+
+- name: Check controller-side TLS certificate and key files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  delegate_to: localhost
+  become: false
+  loop:
+    - "{{ vault_tls_cert_file }}"
+    - "{{ vault_tls_key_file }}"
+    - "{{ vault_tls_ca_file }}"
+  register: vault_tls_local_files
+
+- name: Require all TLS materials to exist
+  ansible.builtin.assert:
+    that: item.stat.exists and item.stat.isreg
+    fail_msg: Required TLS file is absent from the controller.
+  loop: "{{ vault_tls_local_files.results }}"
+
+- name: Install Vault package prerequisites
+  ansible.builtin.dnf:
+    name:
+      - dnf-plugins-core
+      - shadow-utils
+      - xfsprogs
+    state: present
+
+- name: Configure the official HashiCorp Amazon Linux repository
+  ansible.builtin.get_url:
+    url: https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+    dest: /etc/yum.repos.d/hashicorp.repo
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+
+- name: Install Vault Community Edition
+  ansible.builtin.dnf:
+    name: "vault-{{ vault_package_version }}"
+    state: present
+
+- name: Ensure the Vault service account exists
+  ansible.builtin.user:
+    name: vault
+    system: true
+    shell: /sbin/nologin
+    home: /etc/vault.d
+    create_home: false
+
+- name: Create Vault configuration, TLS, and Raft directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: vault
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/vault.d, owner: root, mode: "0750" }
+    - { path: /etc/vault.d/tls, owner: root, mode: "0750" }
+    - { path: /opt/vault/data, owner: vault, mode: "0700" }
+
+- name: Inspect any existing filesystem signature before formatting
+  ansible.builtin.command:
+    argv:
+      - blkid
+      - -o
+      - export
+      - "{{ vault_data_device }}"
+  register: vault_data_blkid
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse to reformat a volume with an unexpected existing filesystem
+  ansible.builtin.assert:
+    that:
+      - vault_data_blkid.rc != 0 or 'LABEL=VAULT_DATA' in vault_data_blkid.stdout
+    fail_msg: The data device already has a different filesystem; inspect it manually.
+
+- name: Format the data volume as XFS when it has no filesystem
+  ansible.builtin.command:
+    argv:
+      - mkfs.xfs
+      - -L
+      - VAULT_DATA
+      - "{{ vault_data_device }}"
+  when: vault_data_blkid.rc != 0
+
+- name: Mount the persistent Vault data volume
+  ansible.posix.mount:
+    path: "{{ vault_data_mount }}"
+    src: LABEL=VAULT_DATA
+    fstype: xfs
+    opts: defaults,noatime
+    state: mounted
+
+- name: Set ownership on the mounted Raft data directory
+  ansible.builtin.file:
+    path: "{{ vault_data_mount }}"
+    state: directory
+    owner: vault
+    group: vault
+    mode: "0700"
+
+- name: Install Vault TLS certificate
+  ansible.builtin.copy:
+    src: "{{ vault_tls_cert_file }}"
+    dest: "{{ vault_tls_remote_cert }}"
+    owner: root
+    group: vault
+    mode: "0640"
+  notify: Restart Vault
+
+- name: Install Vault TLS private key
+  ansible.builtin.copy:
+    src: "{{ vault_tls_key_file }}"
+    dest: "{{ vault_tls_remote_key }}"
+    owner: vault
+    group: vault
+    mode: "0640"
+  no_log: true
+  notify: Restart Vault
+
+- name: Install TLS CA certificate
+  ansible.builtin.copy:
+    src: "{{ vault_tls_ca_file }}"
+    dest: "{{ vault_tls_remote_ca }}"
+    owner: root
+    group: vault
+    mode: "0640"
+  notify: Restart Vault
+
+- name: Configure Vault listener and integrated Raft storage
+  ansible.builtin.template:
+    src: vault.hcl.j2
+    dest: /etc/vault.d/vault.hcl
+    owner: vault
+    group: vault
+    mode: "0640"
+    validate: "vault server -config=%s -verify-only"
+  notify: Restart Vault
+
+- name: Enable and start Vault
+  ansible.builtin.systemd:
+    name: vault
+    enabled: true
+    state: started
+    daemon_reload: true

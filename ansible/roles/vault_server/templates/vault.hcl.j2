@@ -1,0 +1,19 @@
+ui = true
+disable_mlock = false
+log_level = "info"
+api_addr = "{{ vault_api_addr }}"
+cluster_addr = "https://{{ ansible_default_ipv4.address }}:8201"
+
+storage "raft" {
+  path    = "/opt/vault/data"
+  node_id = "{{ vault_raft_node_id }}"
+}
+
+listener "tcp" {
+  address         = "0.0.0.0:8200"
+  cluster_address = "0.0.0.0:8201"
+  tls_disable     = 0
+  tls_cert_file   = "{{ vault_tls_remote_cert }}"
+  tls_key_file    = "{{ vault_tls_remote_key }}"
+  tls_min_version = "tls12"
+}

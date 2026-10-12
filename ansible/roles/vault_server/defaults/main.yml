@@ -1,0 +1,12 @@
+---
+vault_tls_cert_file: "{{ lookup('env', 'VAULT_TLS_CERT') }}"
+vault_tls_key_file: "{{ lookup('env', 'VAULT_TLS_KEY') }}"
+vault_tls_ca_file: "{{ lookup('env', 'VAULT_TLS_CA') }}"
+vault_tls_remote_cert: /etc/vault.d/tls/vault.crt
+vault_tls_remote_key: /etc/vault.d/tls/vault.key
+vault_tls_remote_ca: /etc/vault.d/tls/ca.crt
+vault_api_addr: "https://vault.example.invalid:8200"
+vault_raft_node_id: "{{ inventory_hostname }}"
+vault_data_device: /dev/nvme1n1
+vault_data_mount: /opt/vault/data
+vault_package_version: "1.21.4"

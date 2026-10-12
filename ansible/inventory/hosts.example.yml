@@ -1,0 +1,8 @@
+all:
+  children:
+    vault:
+      hosts:
+        vault-server:
+          ansible_host: 192.0.2.10
+          ansible_user: ec2-user
+          ansible_ssh_private_key_file: "{{ lookup('env', 'VAULT_SSH_KEY') }}"

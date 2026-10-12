@@ -1,0 +1,7 @@
+---
+- name: Install and configure the dedicated Vault server
+  hosts: vault
+  become: true
+  gather_facts: true
+  roles:
+    - vault_server

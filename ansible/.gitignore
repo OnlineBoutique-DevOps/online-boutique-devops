@@ -1,0 +1,4 @@
+inventory/hosts.yml
+group_vars/vault.yml
+files/tls/*
+!files/tls/README.md
