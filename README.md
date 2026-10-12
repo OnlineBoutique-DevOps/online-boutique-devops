@@ -1,3 +1,18 @@
+<!-- Local course project entry point: see docs/fase3-runbook.md for AWS DevSecOps
+     deployment phases, safety gates, and current verification status. -->
+
+## Course project: AWS DevSecOps
+
+This repository's course implementation targets AWS EKS, ECR, GitHub Actions, Terraform, and Helm. The upstream Online Boutique documentation below describes its original Google Cloud/GKE examples; it is not the deployment procedure for the course environment.
+
+- [Fase II delivery evidence](EVIDENCIA-ENTREGA.md)
+- [Fase III implementation and evidence runbook](docs/fase3-runbook.md)
+- [Vault EC2 Terraform proposal](terraform/vault/README.md)
+
+### Verificación local de Fase III
+
+El trabajo de Vault está preparado localmente; no se ha desplegado en AWS ni en EKS. Pasaron Terraform 1.14.9 con AWS provider 5.100.0 (`fmt -check`, `init -backend=false`, `validate`), Ansible Core 2.15.13 (`--syntax-check`), Helm 3.21.1 (`lint` y plantillas en modos normal, preserve y Vault) y la prueba local TLS/ACL de Vault 1.21.4. Las versiones de `ansible.posix` (1.6.2), Vault Secrets Operator (chart 1.6.0) y `hashicorp/vault-action` (4.0.0) están fijadas. La idempotencia en una segunda ejecución, el plan de AWS, el despliegue VSO, OIDC desde GitHub contra Vault real y la sincronización en EKS siguen pendientes. Mantén `VAULT_SECRETS_ENABLED` en `false` hasta completar las comprobaciones de migración del runbook.
+
 <!-- <p align="center">
 <img src="/src/frontend/static/icons/Hipster_HeroLogoMaroon.svg" width="300" alt="Online Boutique" />
 </p> -->

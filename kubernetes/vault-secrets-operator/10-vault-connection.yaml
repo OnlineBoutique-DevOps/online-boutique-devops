@@ -1,0 +1,9 @@
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultConnection
+metadata:
+  name: vault-outside-eks
+  namespace: default
+spec:
+  address: https://vault.example.invalid:8200
+  caCertSecretRef: vault-ca
+  skipTLSVerify: false

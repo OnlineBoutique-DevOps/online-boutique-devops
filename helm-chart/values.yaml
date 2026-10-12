@@ -8,6 +8,13 @@ images:
 auth:
   adminSecretKey: "super-secret-admin-token-2026"
 
+# Enable only after VSO reports the destination Secret synced. Before switching
+# this on, set preserveOnRemoval=true for one Helm release so Helm keeps the
+# existing Secret during the ownership handoff. Both defaults preserve Helm.
+vaultSecrets:
+  enabled: false
+  preserveOnRemoval: false
+
 # Configuración de la Base de Datos PostgreSQL (Reseñas y Compras Verificadas)
 database:
   enabled: true

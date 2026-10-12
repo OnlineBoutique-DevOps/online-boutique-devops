@@ -1,0 +1,15 @@
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: reviewservice-vault-auth
+  namespace: default
+spec:
+  vaultConnectionRef: vault-outside-eks
+  method: jwt
+  mount: jwt-eks
+  jwt:
+    role: reviewservice-vso
+    serviceAccount: reviewservice-vault-reader
+    audiences:
+      - vault
+    tokenExpirationSeconds: 600

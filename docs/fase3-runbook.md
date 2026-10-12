@@ -1,0 +1,120 @@
+# Fase III DevSecOps: implementación, validación y evidencias
+
+Este runbook refleja lo implementado en el repositorio y separa claramente lo no probado. No se han creado recursos en AWS ni se ha desplegado nada en EKS. Los pasos remotos de este documento son instrucciones futuras; no ejecutarlos hasta contar con presupuesto, permisos y aprobación para el despliegue.
+
+## Arquitectura
+
+```mermaid
+flowchart LR
+  Mac[Mac: Ansible + CLI] -->|SSH /32 opcional, TLS; SSM depende del Lab| EC2[EC2 fuera de EKS]
+  EC2 --> Data[EBS gp3 cifrado, Raft persistente]
+  EC2 --> V[Vault UI/API HTTPS 8200]
+  GH[GitHub Actions manual] -->|OIDC/JWT, 5 min, policy de probe| V
+  EKS[EKS existente] -->|JWT de ServiceAccount, TLS 8200| V
+  V -->|KV v2, ACL lectura de un path| VSO[Vault Secrets Operator]
+  VSO --> Secret[Kubernetes Secret reviewservice-secrets]
+  Secret --> Apps[PostgreSQL y ReviewService, secretKeyRef actual]
+  GH -->|AWS Academy temporal actual| AWS[ECR/EKS; workflows Fase II sin cambios]
+```
+
+La autenticación GitHub→Vault y EKS→Vault usa roles JWT separados y montajes separados. Ninguno necesita un proveedor OIDC de IAM de AWS. GitHub-hosted runners no tienen ruta a un Vault privado: el smoke test exige un runner confiable `self-hosted` con la etiqueta `vault-network`. No se configura ni instala un runner.
+
+## Fase 1: infraestructura
+
+Implementado en `terraform/vault/`: EC2 `t3.small`, volumen raíz cifrado de 8 GiB, EBS gp3 cifrado separado de 20 GiB para Raft con `prevent_destroy`, Security Group dedicado, IMDSv2 y salida limitada a HTTPS/DNS. Solo consulta VPC/subnet existentes. `assign_public_ip` y `enable_ssh` están apagados por defecto. No incluye NAT, load balancer, rol IAM ni SSM endpoints.
+
+Costo indicativo: alrededor de USD 21.15/mes con la instancia encendida 730 h, 28 GiB de gp3 y una IPv4 pública todo el mes; sin IPv4, cerca de USD 17.50/mes. Más detalles y supuestos en [el diseño de Fase 1](fase3-fase1-diseno.md). El costo actual de EKS puede superar el crédito incluso antes de estos recursos.
+
+Bloqueos de Learner Lab: confirmar VPC/subnet y rutas, presupuesto corriente del EKS, permisos/cuotas para EC2/EBS/SG, AMI, key pair si se usa SSH, SG real de EKS y si existe perfil IAM compatible con SSM. Los IDs no se han podido confirmar desde el código.
+
+Comprobaciones futuras, desde `terraform/vault/` y con variables locales ignoradas por Git:
+
+Se ejecutó `terraform fmt` con Terraform 1.16.5, `terraform fmt -check` y `terraform validate` con Terraform 1.14.9, e `init -backend=false` con AWS provider 5.100.0. La ejecución inicial de `validate` dentro del sandbox no pudo iniciar el proceso local del provider; al repetirla con permisos locales ampliados pasó. La versión de trabajo queda fijada en `terraform/vault/.terraform-version`. La inicialización no configuró backend remoto ni consultó AWS.
+
+No se ejecutó `terraform plan`, porque los data sources requieren consultar AWS. Por inspección, el módulo administra un Security Group, una EC2, un volumen EBS y su attachment; no declara recursos de EKS/ECR ni cambia recursos existentes. El plan real sigue siendo necesario antes de cualquier `apply`. El estado de este módulo será local e independiente; hay que protegerlo como dato sensible. El volumen `prevent_destroy` reduce el riesgo de borrado accidental, pero no sustituye respaldos.
+
+## Fase 2: Ansible
+
+Implementado en `ansible/`: `site.yml`, rol `vault_server`, instalación desde el repositorio RPM oficial con Vault fijado a 1.21.4, servicio systemd, listener TLS obligatorio, UI habilitada y almacenamiento integrado Raft sobre el volumen EBS montado. El rol falla cerrado si falta TLS real, conserva host key checking, no registra la clave privada (`no_log`) y evita reformatear un volumen que tenga un filesystem distinto de `VAULT_DATA`. La colección externa `ansible.posix` está fijada en 1.6.2 en `ansible/requirements.yml`; `mount` pertenece a esa colección y no a `ansible-core`.
+
+Preparación local cuando exista EC2, DNS y PKI:
+
+1. Ejecuta `scripts/vault/create-local-pki.sh <FQDN-Vault>`; la CA privada requiere passphrase y los archivos se guardan por defecto fuera del repositorio, bajo el directorio de configuración local. No copies ninguna clave al checkout.
+2. Proporciona rutas con `VAULT_TLS_CERT`, `VAULT_TLS_KEY` y `VAULT_TLS_CA`; copia los ejemplos de inventario y variables únicamente si los archivos destino no existen. El inventario privado es ignorado por Git. Instala la dependencia fijada desde `ansible/` con `ansible-galaxy collection install -r requirements.yml`.
+3. Revisa conectividad por SSM o habilita, con aprobación aparte, SSH/22 limitado a tu `/32` y el key pair preexistente. Ansible no abre puertos.
+4. Confirma con `lsblk` cuál nombre NVMe corresponde al EBS de datos y ajusta `vault_data_device` localmente si no es `/dev/nvme1n1`.
+5. La comprobación `ansible-playbook --syntax-check -i inventory/hosts.example.yml site.yml` pasó con Ansible Core 2.15.13 y `ansible.posix` 1.6.2. No se ejecutó `--check` ni una segunda corrida: el rol requiere una instancia Linux, systemd, DNF y un EBS real; además, primero debe confirmarse el dispositivo de datos para no formatear el disco equivocado. La idempotencia queda preparada por módulos declarativos, pero no está demostrada hasta ejecutar dos corridas autorizadas sobre el host. `ansible-lint` no se instaló ni se ejecutó.
+
+Las tareas `mkfs`/mount requieren que el EBS ya esté adjunto. No se conectó Ansible a AWS y no se usaron credenciales ni PKI reales.
+
+## Fase 3: Vault, KV, ACL y GitHub Actions
+
+Implementado en `vault/policies/` y `scripts/vault/`. El motor propuesto es KV v2 en `kv/`. La policy `reviewservice-read` solo lee `kv/data/reviewservice`; `github-ci-probe` solo lee `kv/data/ci/probe`; `reviewservice-vso` tiene lectura de la ruta de aplicación. `configure-github-auth.sh` crea el backend GitHub JWT y rol ligado al repositorio, `main`, workflow específico y TTL máximo de cinco minutos. `configure-vso-auth.sh` configura un segundo backend JWT ligado a un único ServiceAccount y audience.
+
+La inicialización captura el JSON de shares/token directamente a GPG cifrado fuera del repositorio y no lo muestra en pantalla. Requiere un destinatario público GPG previamente preparado; recuperar material requiere la clave privada correspondiente. Nunca introduzcas root token/unseal shares en GitHub. Desprecinta Vault interactivamente con las shares guardadas por separado y reduce/elimina el uso del root token después del bootstrap.
+
+Tras importar credenciales válidas desde una fuente aprobada, configura variables de entorno `VAULT_ADDR`, `VAULT_CACERT` y `VAULT_TOKEN` usando un token operador corto; no pegues su valor en comandos guardados en el historial. Ejecuta los scripts solo contra el Vault correcto después de comprobar `vault status`. Inicializa el canary no sensible `kv/ci/probe` con `status=ready`. Los valores de aplicación se migran manualmente desde el gestor de credenciales, nunca desde `values.yaml` por automatización ciega.
+
+`.github/workflows/vault-smoke.yml` es `workflow_dispatch`, restringe permisos a `contents: read` e `id-token: write`, usa `hashicorp/vault-action` v4.0.0 fijada al SHA íntegro del release firmado y no imprime la respuesta recuperada. La audience configurada en Vault (`https://github.com/OnlineBoutique-DevOps`) coincide con el valor predeterminado documentado por la acción; cambiar `jwtGithubAudience` exigiría actualizar `bound_audiences`. Requiere variables GitHub `VAULT_ADDR` y `VAULT_CA_CERT`, rol Vault configurado y runner confiable con etiqueta `vault-network`; al usar Node 24, ese runner debe tener una versión de Actions Runner que lo soporte. El workflow CD conserva AWS Academy temporal y ahora lee `VAULT_SECRETS_ENABLED` desde GitHub Variables, con valor predeterminado `false`; no se activó.
+
+## Fase 4: Kubernetes y pruebas
+
+Implementado como manifiestos preparatorios en `kubernetes/vault-secrets-operator/`. Se propone Vault Secrets Operator (VSO) y JWT con issuer de EKS. El recurso `VaultStaticSecret` conserva el Secret Kubernetes `reviewservice-secrets` y las claves que los Pods actuales ya usan. El chart Helm tiene `vaultSecrets.enabled: false` por defecto; con ese valor la plantilla original continúa administrando el Secret. Tras validar VSO y sincronización, `true` permite que VSO sea el escritor del mismo Secret sin cambiar los `secretKeyRef` de la aplicación.
+
+La combinación fijada para revisión es Vault 1.21.4 y Vault Secrets Operator chart 1.6.0; la documentación de HashiCorp indica soporte de VSO para Vault 1.11 o posterior. `helm lint` pasó. `helm template` pasó en modo normal, preserve y Vault: preserve agrega `helm.sh/resource-policy: keep` al Secret de Helm y Vault omite el Secret. No se renderizaron los manifiestos VSO contra sus CRDs porque el operador no está instalado y no se desplegó nada. Antes de activar: comprueba recursos para EKS Auto Mode, comparte solo el CA público en `default/vault-ca`, reemplaza el hostname reservado de `VaultConnection`, configura el JWT issuer real y llena KV desde un gestor de credenciales. Usa el chart 1.6.0 fijado y `--dry-run` antes de una instalación autorizada. Para migrar, `vault kv put kv/reviewservice DB_PASSWORD=@/ruta/segura/db-password ADMIN_SECRET_KEY=@/ruta/segura/admin-key` lee archivos fuera del checkout sin poner los valores en argumentos ni logs. Comprueba que `VaultStaticSecret` está sincronizado. Verifica solo la presencia de campos sin imprimirlos:
+
+```sh
+kubectl get secret reviewservice-secrets -n default -o json \
+  | jq -e '.data | has("DB_PASSWORD") and has("ADMIN_SECRET_KEY")' >/dev/null
+```
+
+Migración por etapas para que Helm no retire el Secret durante el handoff:
+
+1. Mantén `VAULT_SECRETS_ENABLED=false`, configura `VAULT_PRESERVE_SECRET_ON_REMOVAL=true` y ejecuta un upgrade Helm normal. La revisión activa registra `helm.sh/resource-policy: keep` mientras el Secret sigue incluido en el chart.
+2. Instala VSO y aplica conexión/autenticación. Aplica `VaultStaticSecret` con `create: true` y `overwrite: true`; espera `Ready=True` y verifica las claves con el comando anterior. No continúes si Vault está sellado, inaccesible o la sincronización falla.
+3. Configura `VAULT_SECRETS_ENABLED=true` y `VAULT_PRESERVE_SECRET_ON_REMOVAL=false`, y despliega. Helm omite el Secret en la nueva revisión y respeta el `keep` registrado en la anterior. VSO queda como único escritor; el Secret queda fuera del inventario de Helm.
+4. Observa VSO y las cargas de trabajo. Si los valores cambiaron, fuerza un rollout controlado solo después de verificar la sincronización.
+
+Si se omite el paso 1, Helm puede borrar el Secret y crear una ventana en la que pods nuevos no arrancan. Si Vault queda sellado o inaccesible después de una sincronización correcta, el controlador marca el recurso no sincronizado y reintenta, dejando la última copia de Kubernetes; la aplicación puede seguir usando un valor obsoleto. Antes de la primera sincronización, el Secret Helm existente se conserva y no se debe pasar al paso 3. Ante fallos, pausa CD, restaura conectividad/TLS/JWT/política y espera sincronización. No uses `helm rollback` ni borres `VaultStaticSecret` como atajo después del handoff: volver a Helm como escritor requiere una transición de propiedad revisada y probada. La anotación `keep` evita la eliminación pero deja el objeto fuera de gestión de Helm. [Comportamiento de `keep` en Helm](https://helm.sh/docs/howto/charts_tips_and_tricks/); [reintentos del controlador VSO 1.6.0](https://github.com/hashicorp/vault-secrets-operator/blob/v1.6.0/controllers/vaultstaticsecret_controller.go).
+
+Los secretos sincronizados existen también en etcd: aplicar RBAC mínimo y revisar cifrado en reposo. Los manifiestos no se han aplicado; sus CRDs aún no están instalados en el clúster.
+
+### Prueba local automatizada
+
+`tests/vault/local-security-smoke.sh` inicia un Vault desechable en loopback con TLS y un data directory temporal. Comprueba lectura permitida, lectura denegada, cambio de política, token inválido/expirado y rechazo de lectura en estado sellado. Solo escribe un canary sintético; no llama AWS ni usa los secretos de la aplicación. Requiere `vault`, `openssl` y `jq` y elimina el directorio temporal que crea al salir. Se ejecuta con:
+
+```sh
+bash tests/vault/local-security-smoke.sh
+```
+
+El smoke test pasó con Vault 1.21.4: comprobó listener TLS, lectura permitida y denegada, cambio de política, token inválido/expirado y rechazo en estado sellado. Solo se inició en loopback con datos sintéticos; el cleanup eliminó su directorio temporal. Para la validación local, Terraform 1.14.9, Ansible Core 2.15.13, Helm 3.21.1 y Vault 1.21.4 se descargaron a `/private/tmp`, sin instalación global. `helm lint --strict` pasó con una recomendación no bloqueante de añadir un icono al chart. No se consultó el clúster.
+
+La prueba sellada es únicamente en el servidor temporal local. Nunca pruebes `vault operator seal` en el Vault de AWS o en un servicio compartido. El smoke CI valida OIDC real y lectura permitida cuando el runner se conecte; una ejecución workflow_dispatch futura debe añadir evidencia de acceso denegado/TTL, sin publicar valores.
+
+## Evidencia recopilable para evaluación
+
+- Seguridad: salida de estado que muestre initialized/unsealed sin tokens, lista de mounts/policies por nombre, ACL permitida/denegada y resultado del test local.
+- UI: captura de login por TLS con hostname/certificado válidos y CIDR de origen restringido; ocultar dirección/identificadores que no se deban compartir.
+- Portafolio: este diagrama y runbook, capturas de Ansible primera/segunda ejecución sin variables sensibles, Vault UI y Actions con lectura sin valores.
+- Entregables: Terraform aislado y plan revisado, rol Ansible, policies, workflow OIDC manual, recursos VSO y Helm con valor predeterminado que conserva el flujo previo.
+
+No se adjuntan capturas ficticias ni resultados de ejecución inexistentes.
+
+## Estado de los cuatro criterios
+
+| Criterio (25 puntos cada uno) | Estado verificable actual |
+|---|---|
+| 1. Vault, KV y políticas | Configuración, scripts y ACL preparados; no ejecutados contra Vault real. |
+| 2. UI accesible con seguridad | HCL habilita UI y TLS; no hay servidor desplegado, DNS, ruta ni captura verificada. |
+| 3. Portafolio de evidencias | Runbook y diagrama están en el repositorio; faltan evidencias capturadas durante ejecuciones reales. |
+| 4. Repositorio/README/Ansible/Vault/CI | README enlaza el runbook y las validaciones locales descritas arriba pasaron; idempotencia remota, workflow real, VSO y despliegue EKS siguen pendientes. |
+
+## Riesgos y bloqueos manuales
+
+- El EKS existente puede consumir el límite USD 50 antes de Vault; consultar facturación/estado y soporte de Kubernetes antes de añadir costo.
+- Learner Lab puede rechazar EC2, volumen, SG, key pair o ciertas AMIs; no se pueden inferir IAM/SSM desde los archivos.
+- Subnet privada necesita salida existente o endpoint SSM. No añadir NAT. Subnet pública implica IPv4 y exposición controlada.
+- El SG del clúster puede no representar la fuente de red de los pods; confirmar flujo real antes de abrir 8200 a ese SG.
+- Runner GitHub-hosted no llega a Vault privado; configurar un runner confiable con túnel/ruta segura y disponible, o dejar el workflow como evidencia pendiente.
+- Estado Terraform local debe almacenarse/protegerse; el volumen persistente protege datos contra terminación accidental de EC2, no sustituye snapshots/backups ni procedimiento de recuperación.
+- Revisar los valores predeterminados del chart, decidir si fueron credenciales reales y rotarlas si corresponde antes de activar el flujo Vault.
