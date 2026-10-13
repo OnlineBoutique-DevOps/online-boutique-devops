@@ -25,13 +25,13 @@ Implementado en `terraform/vault/`: EC2 `t3.small`, volumen raíz cifrado de 8 G
 
 Costo indicativo: alrededor de USD 21.15/mes con la instancia encendida 730 h, 28 GiB de gp3 y una IPv4 pública todo el mes; sin IPv4, cerca de USD 17.50/mes. Más detalles y supuestos en [el diseño de Fase 1](fase3-fase1-diseno.md). El costo actual de EKS puede superar el crédito incluso antes de estos recursos.
 
-Bloqueos de Learner Lab: confirmar VPC/subnet y rutas, presupuesto corriente del EKS, permisos/cuotas para EC2/EBS/SG, AMI, key pair si se usa SSH, SG real de EKS y si existe perfil IAM compatible con SSM. Los IDs no se han podido confirmar desde el código.
+Bloqueos de Learner Lab resueltos en la práctica: EC2, EBS, SG, AMI y key pair propio sí fueron permitidos; SSM no se usó (sin instance profile gestionable) y se documentó SSH restringido como alternativa.
 
 Comprobaciones futuras, desde `terraform/vault/` y con variables locales ignoradas por Git:
 
 Se ejecutó `terraform fmt` con Terraform 1.16.5, `terraform fmt -check` y `terraform validate` con Terraform 1.14.9, e `init -backend=false` con AWS provider 5.100.0. La ejecución inicial de `validate` dentro del sandbox no pudo iniciar el proceso local del provider; al repetirla con permisos locales ampliados pasó. La versión de trabajo queda fijada en `terraform/vault/.terraform-version`. La inicialización no configuró backend remoto ni consultó AWS.
 
-No se ejecutó `terraform plan`, porque los data sources requieren consultar AWS. Por inspección, el módulo administra un Security Group, una EC2, un volumen EBS y su attachment; no declara recursos de EKS/ECR ni cambia recursos existentes. El plan real sigue siendo necesario antes de cualquier `apply`. El estado de este módulo será local e independiente; hay que protegerlo como dato sensible. El volumen `prevent_destroy` reduce el riesgo de borrado accidental, pero no sustituye respaldos.
+Ya se ejecutó `terraform plan` y `apply` contra la cuenta real (392730678728): el plan mostró únicamente Security Group, EC2 `t3.small`, EBS gp3 y su attachment — ningún recurso de EKS/ECR — y se aplicó con estado local independiente en `terraform/vault/` (protegido, ignorado por Git). `assign_public_ip=true` y `enable_ssh` se activaron para esta entrega porque SSM no era viable sin instance profile gestionable; el acceso quedó restringido al /32 del administrador. El volumen `prevent_destroy` reduce el riesgo de borrado accidental, pero no sustituye respaldos.
 
 ### Respaldo y recuperación de Raft
 
@@ -158,6 +158,39 @@ Los estados describen cada evidencia por separado; una validación local no conv
 | Comportamiento de VSO ante Vault sellado/inaccesible | Sello manual → `SecretSynced=False` con error "Vault is sealed", Secret K8s retenido con último dato conocido, 14 pods siguieron Running; unseal → `Ready=True` sin intervención | COMPLETADO Y PROBADO | Ninguna. |
 | Evidencias sanitizadas para evaluación | Matriz actualizada con resultados reales; comandos reproducibles en runbook | IMPLEMENTADO, SIN VALIDAR como portafolio final | Capturas de UI Vault, consola AWS y `kubectl` que toma el alumno antes de entregar. |
 | Valores existentes de `helm-chart/values.yaml` | Tratados como credenciales reales: `DB_PASSWORD` y `ADMIN_SECRET_KEY` rotados a valores nuevos en `kv/reviewservice` antes del handoff; el chart ya no escribe el Secret | COMPLETADO Y PROBADO | Ninguna. |
+
+## Inventario de identidades, rutas y permisos
+
+| Identidad | Autenticación | Policy | Ruta permitida | Uso |
+|---|---|---|---|---|
+| Operador humano (break-glass) | root token, cifrado con GPG fuera del repo | root | todo | init/unseal, bootstrap, emergencias |
+| Administrador SO | SSH key `vault-admin`, restringido a /32 del admin | n/a (SO) | TCP 22, 8200 | Ansible, unseal, mantenimiento |
+| GitHub Actions (`vault-smoke.yml`) | JWT OIDC en mount `jwt/`, rol `github-ci-probe`; bound: repo + ref `main` + workflow; TTL ≤5 min | `github-ci-probe` | `kv/data/ci/probe` (read) | Smoke test de CI, canary no sensible |
+| Pod reviewservice (VSO) | JWT de ServiceAccount `default/reviewservice-vault-reader` en mount `jwt-eks/`, rol `reviewservice-vso`, audience `vault` | `reviewservice-vso` | `kv/data/reviewservice` (read) | VSO sincroniza `reviewservice-secrets` |
+| Policy auxiliar `reviewservice-read` | asignada manualmente para pruebas ACL | `reviewservice-read` | `kv/data/reviewservice` (read) | Verificación de lectura autorizada |
+
+Todo lo demás está denegado por defecto (sin policy = sin acceso), verificado con lecturas denegadas y token inválido.
+
+## Recursos AWS realmente creados (cuenta 392730678728, us-east-1)
+
+| Recurso | Detalle | Costo estimado |
+|---|---|---|
+| EKS `online-boutique-cluster` | Auto Mode, k8s 1.34, add-on metrics-server | ~USD 0.10/h control plane (~73/mes) |
+| Nodos EKS (Auto Mode) | 3 instancias en este momento | ~USD 0.09/h c/u |
+| ECR | 13 repos `online-boutique/*` | centavos/GB-mes |
+| EC2 Vault | `t3.small`, IMDSv2, IP pública | ~USD 0.03/h (~21/mes con IPv4) |
+| EBS Vault | root 8 GiB + datos gp3 20 GiB cifrados | ~USD 2/mes |
+| Security Group Vault | 8200 solo SG-EKS + admin /32; 22 solo admin /32 | — |
+| Key pair `vault-admin` | propio, clave privada fuera del repo | — |
+| S3 + DynamoDB | backend Terraform `online-boutique-tfstate-392730678728` | centavos |
+
+## Guion de defensa oral
+
+- **¿Por qué Vault fuera de EKS?** Para que el almacén de secretos no comparta el plano de fallo del clúster que protege; si EKS cae o se recrea, Vault y sus datos en EBS sobreviven, y Vault puede servir también a CI/CD externo.
+- **¿Qué automatiza Ansible?** Instala Vault 1.21.4 fijado, configura TLS/UI/Raft, monta el EBS de datos verificando el dispositivo antes de formatear y deja el servicio bajo systemd; es idempotente (re-ejecución `changed=0`).
+- **¿Cómo se autentica GitHub Actions?** Por OIDC/JWT: el runner pide un token firmado por GitHub y Vault lo valida contra el mount `jwt/` con rol ligado a repo+ref+workflow; no hay token estático de Vault guardado en GitHub. (Pendiente de ejecutar: requiere runner self-hosted con red a Vault.)
+- **¿Cómo entrega VSO los secretos?** El ServiceAccount del pod presenta su JWT a Vault (mount `jwt-eks/`), Vault emite token de corta vida con la policy `reviewservice-vso`, VSO lee `kv/data/reviewservice` y materializa el Secret nativo `reviewservice-secrets`; la app sigue usando `secretKeyRef` sin cambios.
+- **¿Qué pasa si Vault falla?** Probado: al sellar Vault, `VaultStaticSecret` pasa a `SecretSynced=False`, pero el Secret existente queda con el último dato conocido y los 14 pods siguen Running; al desprecintar, VSO resincroniza solo. Punto único de fallo documentado; mitigación: EBS persistente + snapshots.
 
 ## Riesgos y bloqueos manuales
 

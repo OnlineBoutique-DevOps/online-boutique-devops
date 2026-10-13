@@ -9,9 +9,9 @@ This repository's course implementation targets AWS EKS, ECR, GitHub Actions, Te
 - [Fase III implementation and evidence runbook](docs/fase3-runbook.md)
 - [Vault EC2 Terraform proposal](terraform/vault/README.md)
 
-### Verificación local de Fase III
+### Estado de Fase III
 
-El trabajo de Vault está preparado localmente; no se ha desplegado en AWS ni en EKS. Pasaron Terraform 1.14.9 con AWS provider 5.100.0 (`fmt -check`, `init -backend=false`, `validate`), Ansible Core 2.15.13 (`--syntax-check`), Helm 3.21.1 (`lint` y plantillas en modos normal, preserve y Vault) y la prueba local TLS/ACL de Vault 1.21.4. Las versiones de `ansible.posix` (1.6.2), Vault Secrets Operator (chart 1.6.0) y `hashicorp/vault-action` (4.0.0) están fijadas. La idempotencia en una segunda ejecución, el plan de AWS, el despliegue VSO, OIDC desde GitHub contra Vault real y la sincronización en EKS siguen pendientes. Mantén `VAULT_SECRETS_ENABLED` en `false` hasta completar las comprobaciones de migración del runbook.
+Fase III está desplegada y probada en AWS (cuenta 392730678728, us-east-1): Vault 1.21.4 corre en una EC2 dedicada fuera de EKS con TLS y Raft sobre EBS cifrado; Vault Secrets Operator 1.6.0 sincroniza `reviewservice-secrets` (Ready=True) y es el único escritor del Secret tras el handoff gradual desde Helm. Ansible instaló y configuró Vault de forma idempotente (`changed=0` en la tercera corrida). Se probaron lectura permitida/denegada, token inválido, Vault sellado (VSO falla, el Secret retenido mantiene la app viva) y recuperación tras unseal. Única brecha abierta: `vault-smoke.yml` requiere un runner self-hosted `vault-network` que no existe en el entorno; está documentado como BLOQUEADO en la matriz del runbook.
 
 <!-- <p align="center">
 <img src="/src/frontend/static/icons/Hipster_HeroLogoMaroon.svg" width="300" alt="Online Boutique" />
