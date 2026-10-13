@@ -75,6 +75,12 @@ variable "enable_ssh" {
   default     = false
 }
 
+variable "iam_instance_profile" {
+  description = "Existing EC2 instance profile for SSM administrative access; null disables it. voclabs cannot create roles, so a lab-provided profile (e.g. LabInstanceProfile) must be referenced."
+  type        = string
+  default     = null
+}
+
 variable "ssh_key_name" {
   description = "Pre-existing EC2 key-pair name; required only when enable_ssh is true. Never commit the private key."
   type        = string

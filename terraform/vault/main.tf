@@ -122,6 +122,7 @@ resource "aws_instance" "vault" {
   vpc_security_group_ids      = [aws_security_group.vault.id]
   key_name                    = var.enable_ssh ? var.ssh_key_name : null
   associate_public_ip_address = var.assign_public_ip
+  iam_instance_profile        = var.iam_instance_profile
 
   root_block_device {
     volume_type           = "gp3"

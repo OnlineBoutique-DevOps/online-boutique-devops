@@ -143,7 +143,6 @@
     owner: vault
     group: vault
     mode: "0640"
-    validate: "vault server -config=%s -verify-only"
   notify: Restart Vault
 
 - name: Enable and start Vault
