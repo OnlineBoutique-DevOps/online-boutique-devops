@@ -1,4 +1,4 @@
-# Infraestructura de Online Boutique en AWS (cuenta 532727285947, us-east-1)
+# Infraestructura de Online Boutique en AWS (cuenta 392730678728, us-east-1)
 #
 # NOTA SOBRE AWS ACADEMY: el rol de laboratorio (voclabs) no permite crear
 # roles IAM ni proveedores OIDC. Por eso los roles del clúster y de los nodos

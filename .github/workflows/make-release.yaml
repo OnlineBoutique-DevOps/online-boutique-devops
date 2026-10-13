@@ -35,9 +35,9 @@ defaults:
 
 env:
   AWS_REGION: us-east-1
-  AWS_ACCOUNT_ID: "532727285947"
+  AWS_ACCOUNT_ID: "392730678728"
   AWS_PAGER: ""
-  ECR_REGISTRY: 532727285947.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REGISTRY: 392730678728.dkr.ecr.us-east-1.amazonaws.com
   ECR_REPOSITORY_PREFIX: online-boutique
   RELEASE_VERSION: ${{ inputs.version }}
   SOURCE_SHA: ${{ github.sha }}

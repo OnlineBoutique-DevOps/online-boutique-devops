@@ -22,7 +22,7 @@ defaults:
 
 env:
   AWS_REGION: us-east-1
-  AWS_ACCOUNT_ID: "532727285947"
+  AWS_ACCOUNT_ID: "392730678728"
   AWS_PAGER: ""
   EKS_CLUSTER_NAME: online-boutique-cluster
   HELM_RELEASE_NAME: onlineboutique
@@ -30,7 +30,7 @@ env:
   KUBE_NAMESPACE: default
   VAULT_SECRETS_ENABLED: ${{ vars.VAULT_SECRETS_ENABLED || 'false' }}
   VAULT_PRESERVE_SECRET_ON_REMOVAL: ${{ vars.VAULT_PRESERVE_SECRET_ON_REMOVAL || 'false' }}
-  ECR_REGISTRY: 532727285947.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REGISTRY: 392730678728.dkr.ecr.us-east-1.amazonaws.com
   ECR_REPOSITORY_PREFIX: online-boutique
   IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
   SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}

@@ -1,6 +1,6 @@
 # Configuración global de imágenes para Amazon ECR
 images:
-  repository: 532727285947.dkr.ecr.us-east-1.amazonaws.com/online-boutique
+  repository: 392730678728.dkr.ecr.us-east-1.amazonaws.com/online-boutique
   # Sobrescribe el tag predeterminado que toma del appVersion del Chart
   tag: "latest"
 
@@ -30,7 +30,7 @@ reviewservice:
   name: reviewservice
   replicaCount: 1
   image:
-    repository: "532727285947.dkr.ecr.us-east-1.amazonaws.com/online-boutique/reviewservice"
+    repository: "392730678728.dkr.ecr.us-east-1.amazonaws.com/online-boutique/reviewservice"
     tag: "latest"
   service:
     type: ClusterIP
