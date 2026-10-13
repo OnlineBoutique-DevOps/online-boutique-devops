@@ -136,7 +136,7 @@ No se adjuntan capturas ficticias ni resultados de ejecución inexistentes.
 | 1. Vault, KV y políticas | Vault 1.21.4 real en EC2 con TLS+Raft en EBS cifrado, KV v2, 3 políticas de mínimo privilegio, JWT GitHub y JWT-EKS configurados; lectura permitida/denegada, token inválido y sellado/recuperación probados. |
 | 2. UI accesible con seguridad | `ui=true` con TLS verificado (`skipTLSVerify=false`); SG limita 8200 a SG de EKS + admin /32; acceso admin vía SSH restringido a una IP. Falta captura de la UI en navegador. |
 | 3. Portafolio de evidencias | Runbook, diagrama, matriz y resultados reales de despliegue/Ansible/VSO/sellado documentados; faltan capturas de UI y consola AWS que toma el alumno. |
-| 4. Repositorio/README/Ansible/Vault/CI | Terraform aislado aplicado (solo recursos Vault), Ansible idempotente verificado en host real (3ª corrida `changed=0`), VSO sincroniza y es dueño del Secret; `vault-smoke.yml` implementado pero sin runner `vault-network` disponible. |
+| 4. Repositorio/README/Ansible/Vault/CI | Terraform aislado aplicado (solo recursos Vault), Ansible idempotente verificado en host real (`changed=0`), VSO sincroniza y es dueño del Secret; `vault-smoke.yml` ejecutado en verde con runner self-hosted `vault-network` en el EC2 de Vault. |
 
 ### Matriz de requisitos y brechas
 
@@ -151,7 +151,7 @@ Los estados describen cada evidencia por separado; una validación local no conv
 | Vault TLS, Raft, mlock y mount EBS | Vault 1.21.4 sirviendo HTTPS con cert propio, Raft en `/dev/nvme1n1` montado, datos sobrevivieron stop/start de la instancia | COMPLETADO Y PROBADO | Ninguna. |
 | Inicialización, unseal y KV v2 | Init real 5 shares/umbral 3 cifrado con GPG fuera del repo; unseal probado 3 veces (incl. tras restart y tras sello manual); KV v2 con `kv/reviewservice` y `kv/ci/probe` | COMPLETADO Y PROBADO | Ninguna. |
 | ACL de mínimo privilegio y fallo sellado | `reviewservice-read`, `github-ci-probe`, `reviewservice-vso` aplicadas; lectura permitida y denegada verificadas; token inválido rechazado; sello provoca 503 en clientes | COMPLETADO Y PROBADO | Ninguna. |
-| GitHub JWT limitado a repo/ref/workflow | Rol `github-ci-probe` creado en mount `jwt/` con bound repo/ref/workflow y TTL corto; `vault-smoke.yml` implementado | IMPLEMENTADO, SIN VALIDAR | BLOQUEADO: requiere runner self-hosted `vault-network` con salida a Vault; no existe uno disponible. |
+| GitHub JWT limitado a repo/ref/workflow | Rol `github-ci-probe` en mount `jwt/` con bound repo+workflow+ref glob, TTL 5 min; runner self-hosted `vault-network` instalado en el EC2 de Vault; run real de `vault-smoke.yml` en verde (run 38451749309) y run previo falló por rama no autorizada (evidencia negativa del binding) | COMPLETADO Y PROBADO | Runner debe retirarse o apagarse después de la demo (repo público). |
 | Renovación de credenciales AWS CI | Secrets de GitHub renovados tras expiración de sesión del lab; CI/CD verde después | COMPLETADO Y PROBADO (como credenciales temporales) | Federación directa GitHub→AWS OIDC no viable en Academy (IAM restringido). |
 | VSO CRDs, VaultAuth y VaultStaticSecret | Chart 1.6.0 instalado tras dry-run; `VaultConnection`/`VaultAuth`/`VaultStaticSecret` aplicados; `SecretSynced=True Healthy=True Ready=True` | COMPLETADO Y PROBADO | Ninguna. |
 | Handoff Helm→VSO sin borrar el Secret | Etapas ejecutadas: `preserveOnRemoval` → VSO sincronizó → `vaultSecrets.enabled=true`; `ownerReference` del Secret apunta a `VaultStaticSecret`; Helm revisión 3 | COMPLETADO Y PROBADO | Ninguna. |
@@ -198,7 +198,7 @@ Todo lo demás está denegado por defecto (sin policy = sin acceso), verificado 
 - Learner Lab sí permitió EC2 t3.small, EBS gp3, SG y key pair propio. RESUELTO.
 - Administración: SSM no se habilitó (instance profile requerido y salida de red no garantizada); se usa SSH limitado al /32 del administrador + TLS. RESUELTO Y DOCUMENTADO.
 - El SG del clúster EKS sí cubrió el tráfico de pods de Auto Mode hacia Vault en 8200; la sincronización VSO es prueba del flujo. RESUELTO.
-- Runner GitHub-hosted no llega a Vault privado; sigue BLOQUEADO: se requiere runner self-hosted `vault-network`, o dejar `vault-smoke.yml` como evidencia implementada sin ejecutar.
+- Runner GitHub-hosted no llega a Vault privado. RESUELTO: runner self-hosted `vault-network` (`vault-ec2-runner`) corre como servicio systemd en el propio EC2 de Vault, que ya tiene ruta TLS a Vault y egress HTTPS a GitHub. PRECAUCIÓN: el repo es público — el workflow solo corre por `workflow_dispatch` (requiere permiso de escritura) y el runner debe retirarse tras la demo (`sudo ./svc.sh uninstall` en `~/actions-runner`).
 - El estado Terraform de `terraform/vault/` es local y debe protegerse; el EBS persistente protege datos contra stop/start (probado), no sustituye snapshots ni restauración probada.
 - Valores del chart: `DB_PASSWORD`/`ADMIN_SECRET_KEY` rotados en Vault antes del handoff; los valores viejos del repo ya no se usan. RESUELTO.
 - La IP pública del EC2 cambia en cada stop/start; el certificado usa SANs estables (DNS público de la instancia + hostname privado), pero tras un restart hay que rehacer: actualizar `vault_api_addr`/inventory, refrescar el cert si cambia el DNS y actualizar `vault-ca` si se regenera la CA.
