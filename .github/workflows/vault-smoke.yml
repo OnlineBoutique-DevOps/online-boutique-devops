@@ -16,14 +16,6 @@ jobs:
     env:
       VAULT_ADDR: ${{ vars.VAULT_ADDR }}
     steps:
-      - name: Trust the Vault lab CA for Node TLS
-        shell: bash
-        run: |
-          cat > "$RUNNER_TEMP/vault-ca.pem" <<'CA_EOF'
-          ${{ vars.VAULT_CA_CERT }}
-          CA_EOF
-          echo "NODE_EXTRA_CA_CERTS=$RUNNER_TEMP/vault-ca.pem" >> "$GITHUB_ENV"
-
       - name: Read a harmless probe from Vault using GitHub OIDC
         id: vault
         uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4.0.0
