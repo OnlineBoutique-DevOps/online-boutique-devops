@@ -11,7 +11,12 @@
 
 ## 0. Resumen ejecutivo
 
-Se implementó una capa DevSecOps con HashiCorp Vault 1.21.4 sobre la infraestructura existente de Fase II (EKS Auto Mode + ECR + GitHub Actions + Helm), en la cuenta nueva de AWS Academy. Vault corre en una **EC2 dedicada fuera de EKS**, con TLS, almacenamiento Raft sobre EBS cifrado, KV v2, políticas ACL de mínimo privilegio, autenticación JWT/OIDC separada para GitHub Actions y para Kubernetes (Vault Secrets Operator).
+Esta entrega cubre **únicamente la Fase III**: la capa DevSecOps con HashiCorp Vault sobre la infraestructura de EKS ya existente.
+
+Trabajo realizado:
+
+- **Diseño y código** (dispositivo anterior): arquitectura documentada, Terraform aislado `terraform/vault/`, rol Ansible `vault_server`, políticas ACL, scripts de PKI/bootstrap/OIDC, manifiestos VSO, workflow `vault-smoke.yml` y runbook — todo versionado en `feature/fase3-vault-ansible`.
+- **Despliegue y validación real** (este dispositivo): aprovisionamiento del EC2/EBS con Terraform, instalación de Vault 1.21.4 con Ansible, PKI/TLS, init/unseal, KV v2, ACLs, autenticación JWT para GitHub y para EKS, instalación de VSO, handoff gradual del Secret, pruebas negativas y runner self-hosted — todo sobre la cuenta AWS Academy `392730678728`.
 
 Estado real verificado en infraestructura:
 
@@ -189,7 +194,7 @@ Este documento organiza las evidencias por criterio. Inventario de capturas:
 | 11 | Ansible 3ª corrida `changed=0` | 4 | PLAY RECAP en terminal WSL |
 | 12 | Run verde de `vault-smoke.yml` | 1, 4 | GitHub Actions → run `38451749309` |
 | 13 | Run rojo previo (rama no autorizada) | 1 | GitHub Actions → run `38451469882` |
-| 14 | App funcionando en navegador | 4 | `http://<IP-nodo>:30576` |
+| 14 | App funcionando con secretos servidos por Vault | 4 | `http://<IP-nodo>:30576` |
 
 > **[CAPTURAS 9–14 — ver tabla]**
 > Insertar cada captura junto a su número. Para la 10, tapar la sección `data:` del YAML (son los valores reales cifrados en base64).
@@ -206,10 +211,9 @@ Este documento organiza las evidencias por criterio. Inventario de capturas:
 | Terraform aislado de Vault | `terraform/vault/` (estado local, separado) | ✅ |
 | Rol Ansible modular + deps fijadas | `ansible/roles/vault_server/`, `ansible/requirements.yml` | ✅ |
 | Políticas ACL | `vault/policies/` | ✅ |
-| Workflows CI/CD + smoke OIDC | `.github/workflows/` | ✅ |
+| Workflow de smoke OIDC | `.github/workflows/vault-smoke.yml` | ✅ |
 | Manifiestos VSO | `kubernetes/vault-secrets-operator/` | ✅ |
 | Helm con handoff por etapas | `helm-chart/` (`vaultSecrets.*`) | ✅ |
-| Evidencia Fase II | `EVIDENCIA-ENTREGA.md` | ✅ |
 
 ### Pruebas clave reproducibles
 
@@ -247,19 +251,30 @@ kubectl rollout status deployment/postgres-review-db
 
 ---
 
-## 7. Recursos AWS creados y costos
+## 7. Recursos AWS creados en Fase III y costos
+
+**Creados por `terraform/vault/` y la configuración de esta fase:**
 
 | Recurso | Detalle | Costo est. |
 |---|---|---|
-| EKS `online-boutique-cluster` | Auto Mode, k8s 1.34 + metrics-server | ~$0.10/h + nodos ~$0.09/h c/u |
-| 13 repos ECR | `online-boutique/*` | centavos/GB |
-| EC2 Vault `i-0cb07780f4d4fe65c` | t3.small, IMDSv2 | ~$0.03/h |
+| EC2 Vault `i-0cb07780f4d4fe65c` | t3.small, IMDSv2, IP pública | ~$0.03/h (~$21/mes) |
 | EBS | root 8 GiB + gp3 datos 20 GiB cifrados | ~$2/mes |
-| SG Vault `sg-01eff9ed277a6e8b8` | 8200/22 restringidos | — |
-| Runner Actions | servicio en el EC2 de Vault | $0 |
-| S3 + DynamoDB | backend Terraform | centavos |
+| SG Vault `sg-01eff9ed277a6e8b8` | 8200 solo SG-EKS + admin /32; 22 solo admin /32 | — |
+| Key pair `vault-admin` | clave privada fuera del repo | — |
+| Runner Actions `vault-ec2-runner` | servicio systemd en el EC2 de Vault | $0 |
+| Objetos en Vault | mounts `jwt/`+`jwt-eks/`, KV v2, 3 policies, 2 roles | $0 |
+| Objetos en Kubernetes | release VSO 1.6.0, CRDs, VaultConnection/Auth/StaticSecret | $0 |
 
-**Total proyectado si queda encendido todo el mes:** ~$105–110 (domina el control plane EKS). Recomendación: destruir entre sesiones.
+**Preexistentes de Fase II sobre los que Vault opera (no creados en esta fase):**
+
+| Recurso | Detalle |
+|---|---|
+| EKS `online-boutique-cluster` | Auto Mode, k8s 1.34, ~$0.10/h + nodos |
+| 13 repos ECR | `online-boutique/*` |
+| Secret `reviewservice-secrets` | migrado de Helm a VSO en esta fase |
+| S3 + DynamoDB | backend Terraform |
+
+**Costo incremental de Fase III:** ~$23/mes (EC2 + EBS + IPv4). El costo dominante del lab sigue siendo el control plane EKS heredado de Fase II.
 
 ---
 
