@@ -4,6 +4,6 @@ metadata:
   name: vault-outside-eks
   namespace: default
 spec:
-  address: https://ip-172-31-32-20.ec2.internal:8200
+  address: https://ip-172-31-32-47.ec2.internal:8200
   caCertSecretRef: vault-ca
   skipTLSVerify: false

@@ -151,7 +151,7 @@ Demuestra: (a) los tokens expiran y dejan de servir solos; (b) una modificación
 
 ### 2.8 Destrucción y recreación del entorno (idempotencia end-to-end)
 
-Ejecutado en vivo: `terraform destroy -target=aws_instance.vault -target=aws_volume_attachment.vault_data` eliminó la EC2; el volumen EBS de datos sobrevivió gracias a `prevent_destroy`. Luego `terraform apply` creó la instancia nueva (`i-073c6a2e8d7200925`) y re-attachó el mismo volumen.
+Ejecutado en vivo **dos veces**: `terraform destroy -target=aws_instance.vault -target=aws_volume_attachment.vault_data` eliminó la EC2; el volumen EBS de datos sobrevivió gracias a `prevent_destroy`. Luego `terraform apply` recreó la instancia (primero `i-073c6a2e8d7200925`, después `i-0dd9a8320ce8afe51`) y re-attachó el mismo volumen.
 
 Resultados en la instancia recreada:
 
