@@ -127,7 +127,41 @@ Error: permission denied
 - Rol `reviewservice-vso` (mount `jwt-eks/`): JWT de ServiceAccount, expiración 600 s.
 - Los valores antiguos de `helm-chart/values.yaml` se trataron como credenciales reales y **fueron rotados** en Vault antes del handoff; el chart ya no escribe el Secret.
 
-### 2.7 Prueba de Vault sellado y recuperación
+### 2.7 Expiración de token y cambio de política ACL
+
+Ejecutadas contra el Vault real:
+
+```bash
+# Token con TTL=20s
+$ vault kv get -field=status kv/ci/probe   # con token vivo
+ready
+# ...35 segundos después, mismo token:
+$ vault kv get -field=status kv/ci/probe
+Code: 403. permission denied / invalid token     # expirado = inútil
+
+# Cambio de política en caliente (token sigue vivo, misma identidad):
+$ vault kv get -field=DB_PASSWORD kv/reviewservice   # policy=read → <valor leído>
+$ vault policy write reviewservice-vso → capabilities=["deny"]
+$ vault kv get -field=DB_PASSWORD kv/reviewservice   # → Code: 403 permission denied
+$ vault policy write reviewservice-vso → capabilities=["read"]  (restaurada)
+$ vault kv get -field=DB_PASSWORD kv/reviewservice   # → <valor leído>
+```
+
+Demuestra: (a) los tokens expiran y dejan de servir solos; (b) una modificación de política tiene efecto inmediato sobre identidades ya autenticadas — el control de acceso vive en Vault, no en el cliente.
+
+### 2.8 Destrucción y recreación del entorno (idempotencia end-to-end)
+
+Ejecutado en vivo: `terraform destroy -target=aws_instance.vault -target=aws_volume_attachment.vault_data` eliminó la EC2; el volumen EBS de datos sobrevivió gracias a `prevent_destroy`. Luego `terraform apply` creó la instancia nueva (`i-073c6a2e8d7200925`) y re-attachó el mismo volumen.
+
+Resultados en la instancia recreada:
+
+- `ansible-playbook site.yml` instaló Vault completo desde cero (`changed=11`), y la tarea de guardia **detectó el filesystem XFS existente en el EBS y no reformateó** (`skipped=1`) — la protección anti-formato funciona.
+- `vault operator unseal` con **las mismas 3 shares** → `Sealed: false`, mismo `Cluster ID 7e1cf542-b8c7-f79f-fb33-956b7535e0cb` → los datos Raft sobrevivieron a la destrucción de la instancia.
+- Al cambiar la IP privada, se reemitió el certificado con los nuevos SAN (la CA no cambió → el Secret `vault-ca` siguió válido) y se actualizó el `VaultConnection` → VSO volvió a `SecretSynced=True Ready=True`.
+
+Esto demuestra que el entorno se destruye y recrea desde código (Terraform + Ansible), y que los secretos persisten en el volumen dedicado independientemente de la instancia.
+
+### 2.9 Prueba de Vault sellado y recuperación
 
 Ejecutada en producción del laboratorio:
 
@@ -234,7 +268,8 @@ kubectl rollout status deployment/postgres-review-db
 
 - Runner self-hosted `vault-ec2-runner` (etiqueta `vault-network`) en el propio EC2 de Vault — los runners hospedados en GitHub no tienen ruta a un endpoint privado.
 - El workflow pide el id-token OIDC de GitHub, `hashicorp/vault-action` lo intercambia en el mount `jwt/` por un token de 5 min con la policy `github-ci-probe`, lee `kv/ci/probe` y verifica `status=ready` **sin imprimirlo**.
-- Run en verde: `38451749309`. Run rojo previo (`38451469882`) rechazado por `workflow_ref` no ligado — evidencia de que el binding funciona.
+- El workflow se dispara por `workflow_dispatch` **y por `push`** a `main`/`feature/fase3-vault-ansible` cuando cambian archivos de Vault/VSO — el commit que agregó el trigger ejecutó el pipeline automáticamente.
+- Runs en verde: `38451749309` (dispatch) y el run por push. Run rojo previo (`38451469882`) rechazado por `workflow_ref` no ligado — evidencia de que el binding funciona.
 
 > **[CAPTURA 11–13 — ver tabla]**
 

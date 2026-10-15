@@ -2,6 +2,9 @@ name: Vault OIDC smoke test
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main, feature/fase3-vault-ansible]
+    paths: [.github/workflows/vault-smoke.yml, vault/**, kubernetes/vault-secrets-operator/**]
 
 permissions: {}
 
