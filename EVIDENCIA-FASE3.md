@@ -212,6 +212,44 @@ $ vault operator unseal ×3 shares
 > **[CAPTURA 6 — `VaultStaticSecret` recuperado tras unseal]**
 > `SecretSynced=True Healthy=True Ready=True` después del unseal.
 
+### 2.10 Respaldo y recuperación de Raft (documentado)
+
+**Por qué se hizo así:** el EBS persistente protege contra la destrucción de la instancia (probado en §2.8), pero **no** contra pérdida o corrupción del volumen — para eso existen los snapshots Raft. Un snapshot contiene datos confidenciales cifrados por Vault: se guarda fuera del repositorio, en ubicación con acceso limitado, y nunca en artefactos de CI. El token operador y las shares de unseal se custodian por separado. Procedimiento documentado y marcado honestamente como **no ensayado** — un snapshot no probado no es evidencia de recuperación; medir RPO/RTO queda pendiente.
+
+```sh
+# Backup (Vault unsealed, token operador, directorio FUERA del repo)
+umask 077
+snapshot="$VAULT_BACKUP_DIR/vault-$(date -u +%Y%m%dT%H%M%SZ).snap"
+vault operator raft snapshot save "$snapshot"
+chmod 600 "$snapshot"
+vault operator raft snapshot inspect "$snapshot"   # verifica legibilidad
+
+# Restore — solo en host/red AISLADOS, nunca en el servicio activo:
+# la instancia de recuperación se inicializa con shares NUEVAS,
+# luego:
+vault operator raft snapshot restore -force /ruta/segura/vault-<fecha>.snap
+# y se desprecinta con las shares ORIGINALES del snapshot.
+```
+
+### 2.11 Prueba local automatizada de seguridad
+
+**Por qué se hizo así:** antes de tocar el Vault real, el comportamiento de seguridad se verificó en un Vault **desechable en loopback** — `tests/vault/local-security-smoke.sh` levanta Vault con TLS y data dir temporal, comprueba lectura permitida/denegada, cambio de política, token inválido/expirado y rechazo en estado sellado, solo con un canary sintético, y se autodestruye al salir. Permite iterar las pruebas sin riesgo ni costo — y la regla es explícita: `vault operator seal` nunca se practica en el Vault de AWS fuera de la prueba controlada.
+
+```sh
+bash tests/vault/local-security-smoke.sh   # pasó con Vault 1.21.4
+```
+
+### 2.12 Migración por etapas Helm → VSO
+
+**Por qué se hizo así:** el Secret `reviewservice-secrets` ya existía administrado por Helm; si Helm lo borraba antes de que VSO escribiera, había una ventana donde los pods nuevos no arrancaban. La migración en etapas elimina esa ventana — los `secretKeyRef` de la app **nunca cambiaron**:
+
+1. `VAULT_SECRETS_ENABLED=false` + `VAULT_PRESERVE_SECRET_ON_REMOVAL=true` → upgrade normal: la revisión registra `helm.sh/resource-policy: keep` mientras el Secret sigue en el chart.
+2. VSO instalado + `VaultStaticSecret` `create/overwrite` → esperar `Ready=True` y verificar claves (`has("DB_PASSWORD") and has("ADMIN_SECRET_KEY")` con jq, sin imprimir valores). **No continuar si Vault está sellado.**
+3. `VAULT_SECRETS_ENABLED=true` → Helm omite el Secret pero respeta el `keep`; VSO queda como único escritor (`ownerReference` = VaultStaticSecret).
+4. Observar; rollout controlado solo tras verificar sincronización.
+
+Advertencias documentadas: `helm rollback` y borrar el `VaultStaticSecret` **no** son atajos de reversa — el `keep` deja el objeto fuera de gestión de Helm y volver requiere transición de propiedad revisada. Y un matiz de seguridad: los secretos sincronizados **también existen en etcd** — por eso RBAC mínimo en el clúster y revisar el cifrado en reposo de etcd.
+
 ---
 
 ## 3. Criterio 2: UI y acceso seguro (25 pts)
@@ -272,8 +310,24 @@ Este documento organiza las evidencias por criterio. Inventario de capturas:
 | Rol Ansible modular + deps fijadas | `ansible/roles/vault_server/`, `ansible/requirements.yml` | ✅ |
 | Políticas ACL | `vault/policies/` | ✅ |
 | Workflow de smoke OIDC | `.github/workflows/vault-smoke.yml` | ✅ |
+| Scripts PKI / init cifrado / auth OIDC | `scripts/vault/` | ✅ |
 | Manifiestos VSO | `kubernetes/vault-secrets-operator/` | ✅ |
 | Helm con handoff por etapas | `helm-chart/` (`vaultSecrets.*`) | ✅ |
+| Prueba local de seguridad | `tests/vault/local-security-smoke.sh` | ✅ |
+
+### Hardening del rol Ansible
+
+**Por qué se hizo así:** el rol `vault_server` se diseñó defensivo, no solo funcional: **falla cerrado** si no hay TLS real (prefiere no levantar Vault a servirlo inseguro); marca `no_log` donde toca claves privadas para que nunca lleguen a los logs; verifica el dispositivo del EBS **antes** de `mkfs` y se niega a reformatear un filesystem que no sea el esperado (la guardia que salvó los datos en §2.8); fija Vault 1.21.4 y la colección `ansible.posix` 1.6.2 (`requirements.yml`) — `mount` viene de esa colección, no de ansible-core. Validado con `ansible-playbook --syntax-check` (Core 2.15.13) y con el `changed=0` real de la §2.8.
+
+### Compatibilidad y verificaciones de versiones
+
+| Pieza | Fijada | Verificación |
+|---|---|---|
+| Vault | 1.21.4 | `vault status`, smoke local, despliegue real |
+| VSO chart | 1.6.0 | Documentación HashiCorp: soporta Vault ≥1.11; `helm lint` y `helm template` en 3 modos (normal/preserve/vault) pasaron; instalado tras `--dry-run` |
+| Terraform | 1.14.9/1.16.5 | `fmt -check`, `validate`, `init -backend=false` OK; versión fijada en `.terraform-version` |
+| Ansible | Core 2.15.13 | `syntax-check` + ejecuciones reales |
+| vault-action | v4.0.0 por SHA | Runs verdes; `jwtGithubAudience` coincide con `bound_audiences` configurado en Vault |
 
 ### Pruebas clave reproducibles
 
@@ -297,7 +351,11 @@ kubectl rollout status deployment/postgres-review-db
 - Runner self-hosted `vault-ec2-runner` (etiqueta `vault-network`) en el propio EC2 de Vault — los runners hospedados en GitHub no tienen ruta a un endpoint privado.
 - El workflow pide el id-token OIDC de GitHub, `hashicorp/vault-action` lo intercambia en el mount `jwt/` por un token de 5 min con la policy `github-ci-probe`, lee `kv/ci/probe` y verifica `status=ready` **sin imprimirlo**.
 - El workflow se dispara por `workflow_dispatch` **y por `push`** a `main`/`feature/fase3-vault-ansible` cuando cambian archivos de Vault/VSO — el commit que agregó el trigger ejecutó el pipeline automáticamente.
-- Runs en verde: `38451749309` (dispatch) y el run 38811523676 por push. Run rojo previo (`38451469882`) rechazado por `workflow_ref` no ligado — evidencia de que el binding funciona.
+- Runs en verde: `38451749309` (dispatch), `38811523676` y `38818894888` (push). Run rojo previo (`38451469882`) rechazado por `workflow_ref` no ligado — evidencia de que el binding funciona.
+- `jwtGithubAudience` de la acción coincide con `bound_audiences` configurado en el mount `jwt/` — cambiar uno exige actualizar el otro.
+- **Credenciales AWS del CI/CD:** los workflows de Fase II usan `AWS_ACCESS_KEY_ID`/`SECRET`/`SESSION_TOKEN` en GitHub Secrets — temporales de Academy, el operador las renueva al iniciar cada sesión de lab. La federación GitHub→AWS por OIDC no se configuró porque Academy no permite crear IAM/OIDC providers; el OIDC de Vault es independiente de AWS y no otorga permisos AWS.
+- El workflow CD lee `VAULT_SECRETS_ENABLED` desde GitHub Variables (default `false`) — el handoff Helm→VSO se controla desde esa variable sin tocar código.
+- **Retiro del runner:** en `~/actions-runner` del EC2, `sudo ./svc.sh uninstall` — obligatorio tras la demo porque el repo es público.
 
 > **[CAPTURA 11–13 — ver tabla]**
 
@@ -313,6 +371,10 @@ kubectl rollout status deployment/postgres-review-db
 | Admin SO | SSH key `vault-admin`, SG /32 | — | Ansible, mantenimiento |
 | GitHub Actions | JWT OIDC mount `jwt/`, rol `github-ci-probe`, bound repo+workflow+ref, TTL 5 min | `github-ci-probe` | `kv/data/ci/probe` read |
 | VSO (pod) | JWT de SA `default/reviewservice-vault-reader`, mount `jwt-eks/`, rol `reviewservice-vso`, aud `vault` | `reviewservice-vso` | `kv/data/reviewservice` read |
+| Policy auxiliar (pruebas) | token temporal asignado a mano | `reviewservice-read` | `kv/data/reviewservice` read — verificación ACL |
+| Demo UI (temporal) | token `ui-demo`, TTL 1h | `ui-demo` | solo `list` en `kv/metadata` — ni siquiera lee valores |
+
+Todo lo demás está denegado por defecto (sin policy = sin acceso) — verificado con lecturas denegadas y token inválido.
 
 ---
 
@@ -336,12 +398,12 @@ kubectl rollout status deployment/postgres-review-db
 
 | Recurso | Detalle |
 |---|---|
-| EKS `online-boutique-cluster` | Auto Mode, k8s 1.34, ~$0.10/h + nodos |
+| EKS `online-boutique-cluster` | Auto Mode, k8s 1.34, add-on metrics-server, ~$0.10/h + ~$0.09/h por nodo |
 | 13 repos ECR | `online-boutique/*` |
 | Secret `reviewservice-secrets` | migrado de Helm a VSO en esta fase |
 | S3 + DynamoDB | backend Terraform |
 
-**Costo incremental de Fase III:** ~$23/mes (EC2 + EBS + IPv4). El costo dominante del lab sigue siendo el control plane EKS heredado de Fase II.
+**Costo incremental de Fase III:** ~$21.15/mes con la instancia encendida 730 h + IPv4 pública (~$17.50/mes sin IPv4). El costo dominante del lab sigue siendo el control plane EKS heredado de Fase II. **Operación de costo:** entre sesiones se dejó el entorno dormido — EC2 de Vault `stopped` y deployments escalados a 0 para que Auto Mode retirara todos los nodos; el reactivado completo es un solo script (`vault-wake.sh`).
 
 ---
 
@@ -361,6 +423,15 @@ kubectl rollout status deployment/postgres-review-db
 
 | Brecha | Por qué | Mitigación |
 |---|---|---|
-| Restore desde snapshot no ensayado | Requiere instancia aislada de recuperación; procedimiento documentado en runbook | Datos en EBS persistente probados tras stop/start |
-| Runner self-hosted temporal | Repo público; solo `workflow_dispatch` puede usarlo | Retirar con `sudo ./svc.sh uninstall` tras la demo |
-| La IP pública del EC2 cambia tras stop/start | AWS Academy sin Elastic IP | SANs estables (hostname privado) para VSO; para la UI aceptar el warning de cert |
+| Restore desde snapshot no ensayado | Requiere instancia aislada de recuperación; procedimiento documentado (§2.10) | Datos en EBS persistente probados tras stop/start y 2 recreaciones |
+| Runner self-hosted temporal | Repo público; solo `workflow_dispatch`/push autorizado lo usa | Retirar con `sudo ./svc.sh uninstall` tras la demo |
+| La IP pública del EC2 cambia tras stop/start | AWS Academy sin Elastic IP | SANs estables (hostname privado) para VSO; reemitir cert con el DNS público nuevo (automatizado en `vault-wake.sh`) |
+| Estado Terraform de `terraform/vault/` es local | Learner Lab sin backend remoto dedicado para este stack | Protegido fuera de Git; el `prevent_destroy` del EBS cubre el borrado accidental, no la pérdida del estado |
+| Secretos sincronizados también viven en etcd | VSO escribe Secrets nativos de K8s por diseño | RBAC mínimo en el clúster; cifrado en reposo de etcd como mejora futura |
+| Federación GitHub→AWS OIDC no configurada | Academy no permite crear IAM/OIDC providers | Renovación manual de las 3 credenciales temporales en GitHub Secrets por sesión |
+
+### Restricciones de Learner Lab resueltas en la práctica
+
+- **Permitido:** EC2 t3.small, EBS gp3 cifrado, SG, AMI y key pair propio — suficiente para todo el diseño.
+- **No viable:** SSM (sin instance profile gestionable para el rol del lab) → acceso admin por SSH restringido al /32; OIDC GitHub→AWS (sin permisos IAM) → credenciales temporales renovadas manualmente.
+- `assign_public_ip` y `enable_ssh` existen **apagados por defecto** en el Terraform; se activaron solo para esta entrega al no ser viable SSM.
