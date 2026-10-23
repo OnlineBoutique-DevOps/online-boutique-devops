@@ -1,0 +1,12 @@
+{
+  "name": "reviewservice",
+  "version": "1.0.0",
+  "description": "Review service con autenticacion de compradores y reseñas verificadas",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}
