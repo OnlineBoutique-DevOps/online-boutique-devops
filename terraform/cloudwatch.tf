@@ -3,9 +3,9 @@
 # Centralizamos dos fuentes de registros:
 #   a) Plano de control de EKS: api, audit, authenticator, controllerManager y
 #      scheduler (habilitados en aws_eks_cluster.enabled_cluster_log_types).
-#      EKS crea el grupo por su cuenta la primera vez; aqui lo traemos bajo
-#      gestion de Terraform con un bloque `import` para poder fijar retencion
-#      y detectar drift si alguien lo borra o modifica desde la consola.
+#      Terraform crea el grupo ANTES que el cluster (depends_on en
+#      aws_eks_cluster) para fijar retencion y poder detectar drift si alguien
+#      lo borra o modifica desde la consola.
 #   b) Pods de la aplicacion: Fluent Bit (kubernetes/cloudwatch/) corre como
 #      DaemonSet en cada nodo de Auto Mode y envia stdout/stderr de todos los
 #      microservicios a este grupo. `auto_create_group` esta deshabilitado en
@@ -26,12 +26,6 @@ resource "aws_cloudwatch_log_group" "eks_control_plane" {
   }
 }
 
-# El grupo del plano de control ya existe (lo creo EKS al habilitar los logs).
-# Con este bloque Terraform lo adopta en el proximo `apply` sin recrearlo.
-import {
-  to = aws_cloudwatch_log_group.eks_control_plane
-  id = "/aws/eks/${var.name}/cluster"
-}
 
 resource "aws_cloudwatch_log_group" "application" {
   name              = "/online-boutique/application"

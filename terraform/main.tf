@@ -1,4 +1,4 @@
-# Infraestructura de Online Boutique en AWS (cuenta 392730678728, us-east-1)
+# Infraestructura de Online Boutique en AWS (cuenta 532727285947, us-east-1)
 #
 # NOTA SOBRE AWS ACADEMY: el rol de laboratorio (voclabs) no permite crear
 # roles IAM ni proveedores OIDC. Por eso los roles del clúster y de los nodos
@@ -80,6 +80,10 @@ resource "aws_eks_cluster" "online_boutique" {
   zonal_shift_config {
     enabled = true
   }
+
+  # El log group del plano de control debe existir antes para que la
+  # retencion la fije Terraform y no el valor por defecto (nunca expirar).
+  depends_on = [aws_cloudwatch_log_group.eks_control_plane]
 }
 
 # Add-on de métricas instalado en el clúster (usado por kubectl top / HPA)

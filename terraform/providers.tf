@@ -8,7 +8,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket         = "online-boutique-tfstate-392730678728"
+    bucket         = "online-boutique-tfstate-532727285947"
     key            = "global/s3/terraform.tfstate"
     region         = "us-east-1"
     dynamodb_table = "online-boutique-tflocks"
