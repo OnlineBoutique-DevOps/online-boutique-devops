@@ -117,6 +117,13 @@ jobs:
             --atomic \
             --timeout 10m
 
+      - name: Desplegar observabilidad (Fluent Bit -> CloudWatch)
+        run: |
+          # El Log Group lo crea Terraform; aqui solo se despliega el agente.
+          kubectl apply -f kubernetes/cloudwatch/
+          kubectl rollout status daemonset/fluent-bit --namespace amazon-cloudwatch --timeout=180s || \
+            kubectl describe daemonset/fluent-bit --namespace amazon-cloudwatch
+
       - name: Verificar despliegue
         run: |
           kubectl rollout status deployment/frontend --namespace "$KUBE_NAMESPACE" --timeout=120s

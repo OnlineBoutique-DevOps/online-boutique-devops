@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  namespace: amazon-cloudwatch
+data:
+  # ${AWS_REGION} y ${LOG_GROUP_NAME} vienen del env del DaemonSet.
+  # El grupo lo crea Terraform (terraform/cloudwatch.tf); aqui solo se referencia.
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush                     5
+        Grace                     30
+        Log_Level                 info
+        Daemon                    off
+        Parsers_File              parsers.conf
+        HTTP_Server               On
+        HTTP_Listen               0.0.0.0
+        HTTP_Port                 2020
+        storage.path              /var/fluent-bit/state/flb-storage/
+        storage.sync              normal
+        storage.checksum          off
+        storage.backlog.mem_limit 5M
+
+    # Solo los pods de la aplicacion (namespace default). Excluimos kube-system
+    # y el propio namespace de CloudWatch para no inflar el log group con ruido.
+    [INPUT]
+        Name                tail
+        Tag                 application.*
+        Exclude_Path        /var/log/containers/*_kube-system_*,/var/log/containers/*_amazon-cloudwatch_*,/var/log/containers/*_vault-secrets-operator_*
+        Path                /var/log/containers/*.log
+        multiline.parser    docker, cri
+        DB                  /var/fluent-bit/state/flb_container.db
+        Mem_Buf_Limit       50MB
+        Skip_Long_Lines     On
+        Refresh_Interval    10
+        Rotate_Wait         30
+        storage.type        filesystem
+        Read_from_Head      Off
+
+    # Enriquecimiento con metadatos de Kubernetes (pod, namespace, labels).
+    [FILTER]
+        Name                kubernetes
+        Match               application.*
+        Kube_URL            https://kubernetes.default.svc:443
+        Kube_Tag_Prefix     application.var.log.containers.
+        Merge_Log           On
+        Merge_Log_Key       log_processed
+        K8S-Logging.Parser  On
+        K8S-Logging.Exclude Off
+        Labels              On
+        Annotations         Off
+        Buffer_Size         0
+
+    # Un stream por microservicio: usa la label `app` del pod (frontend,
+    # reviewservice, cartservice, ...) para que en la consola se vea claro
+    # que servicio emitio cada evento.
+    [OUTPUT]
+        Name                cloudwatch_logs
+        Match               application.*
+        region              ${AWS_REGION}
+        log_group_name      ${LOG_GROUP_NAME}
+        log_stream_template $kubernetes['labels']['app']
+        log_stream_prefix   pod-
+        auto_create_group   false
+        extra_user_agent    online-boutique-fase4
+        workers             1
+
+  parsers.conf: |
+    [PARSER]
+        Name                docker
+        Format              json
+        Time_Key            time
+        Time_Format         %Y-%m-%dT%H:%M:%S.%LZ
+
+    [PARSER]
+        Name                cri
+        Format              regex
+        Regex               ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<message>.*)$
+        Time_Key            time
+        Time_Format         %Y-%m-%dT%H:%M:%S.%L%z

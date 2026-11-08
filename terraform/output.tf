@@ -36,3 +36,13 @@ output "ecr_repository_urls" {
 }
 
 data "aws_caller_identity" "current" {}
+
+output "cloudwatch_log_group_eks" {
+  description = "Log group del plano de control de EKS"
+  value       = aws_cloudwatch_log_group.eks_control_plane.name
+}
+
+output "cloudwatch_log_group_application" {
+  description = "Log group donde Fluent Bit centraliza los logs de los microservicios"
+  value       = aws_cloudwatch_log_group.application.name
+}

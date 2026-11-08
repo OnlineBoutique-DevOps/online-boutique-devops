@@ -71,3 +71,9 @@ variable "microservices" {
     "shoppingassistantservice",
   ]
 }
+
+variable "log_retention_days" {
+  description = "Dias de retencion de los CloudWatch Log Groups (plano de control EKS y aplicacion)"
+  type        = number
+  default     = 7
+}
