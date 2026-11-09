@@ -10,6 +10,7 @@
 #   4. Hace `aws logs tail --follow` del grupo de aplicacion: lo que se ve aqui
 #      es lo mismo que la consola CloudWatch > Log groups > Live tail.
 set -euo pipefail
+export MSYS_NO_PATHCONV=1   # Git Bash: no convertir /online-boutique/... en rutas de Windows
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 REGION="${AWS_REGION:-us-east-1}"

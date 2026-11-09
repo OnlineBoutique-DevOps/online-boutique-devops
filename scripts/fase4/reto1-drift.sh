@@ -10,6 +10,7 @@
 #
 # No aplica nada. Reconciliar (terraform apply) es una decision aparte.
 set -euo pipefail
+export MSYS_NO_PATHCONV=1   # Git Bash: no convertir /online-boutique/... en rutas de Windows
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TF_DIR="${TF_DIR:-$ROOT/terraform/vault}"
