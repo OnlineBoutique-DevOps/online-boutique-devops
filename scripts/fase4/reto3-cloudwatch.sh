@@ -13,6 +13,8 @@ set -euo pipefail
 export MSYS_NO_PATHCONV=1   # Git Bash: no convertir /online-boutique/... en rutas de Windows
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# kubectl.exe en Windows necesita rutas nativas; cygpath existe en Git Bash
+command -v cygpath >/dev/null && KROOT="$(cygpath -w "$ROOT")" || KROOT="$ROOT"
 REGION="${AWS_REGION:-us-east-1}"
 APP_LG="/online-boutique/application"
 EKS_LG="/aws/eks/online-boutique-cluster/cluster"
@@ -28,7 +30,7 @@ if ! aws logs describe-log-groups --region "$REGION" --log-group-name-prefix "$A
 fi
 
 echo "==> [2/4] Fluent Bit (DaemonSet) -> CloudWatch"
-kubectl apply -f "$ROOT/kubernetes/cloudwatch/"
+kubectl apply -f "$KROOT/kubernetes/cloudwatch/"
 kubectl rollout status daemonset/fluent-bit -n amazon-cloudwatch --timeout=180s
 kubectl get pods -n amazon-cloudwatch -o wide
 
