@@ -5,7 +5,7 @@
 **Fecha:** [Fecha de entrega]
 **Repositorio:** https://github.com/OnlineBoutique-DevOps/online-boutique-devops
 **Rama:** `feature/fase3-vault-ansible`
-**Cuenta AWS Academy:** `392730678728` — región `us-east-1`
+**Cuenta AWS Academy:** `532727285947` — región `us-east-1` (la cuenta `392730678728` agotó créditos; toda la infraestructura se **reconstruyó desde código** en ~2 h, ver §6.1)
 
 ---
 
@@ -15,9 +15,9 @@ La Fase IV demuestra, sobre la infraestructura ya construida en las fases anteri
 
 | Reto | Qué se demuestra | Estado |
 |---|---|---|
-| **1. Drift de Terraform** | Un cambio manual en la consola (regla del Security Group de Vault) es detectado por `terraform plan` y puede revertirse desde código | Listo — script `scripts/fase4/reto1-drift.sh` |
+| **1. Drift de Terraform** | Un cambio manual en la consola (regla del Security Group de Vault) es detectado por `terraform plan` y puede revertirse desde código | **Ejecutado** — logs en `docs/evidencias/fase4/reto1-*.log` |
 | **2. Auditoría de Vault** | EC2 + SG 8200 aprovisionados por Terraform, UI web accesible por DNS/TLS, política de menor privilegio para GitHub Actions validada con OIDC | Completado en Fase III (reutilizado) |
-| **3. CloudWatch** | Log Groups creados desde Terraform; Fluent Bit centraliza los logs de los 14 microservicios; tráfico real genera eventos visibles en tiempo real | Listo — `terraform/cloudwatch.tf` + `kubernetes/cloudwatch/` |
+| **3. CloudWatch** | Log Groups creados desde Terraform; Fluent Bit centraliza los logs de los 14 microservicios; tráfico real genera eventos visibles en tiempo real | **Ejecutado** — 9 streams activos, `docs/evidencias/fase4/reto3-*.txt` |
 
 Además, en esta fase la aplicación dejó de ser una demo estática: ahora tiene **registro/login de compradores y reseñas verificadas por compra** (ver §5), lo que da sentido funcional a los logs del Reto 3 (intentos de login fallidos, reseñas rechazadas por no haber comprado, etc.).
 
@@ -37,7 +37,7 @@ El **Security Group de Vault** (`online-boutique-vault-sg`), declarado en `terra
 - Sus reglas son fáciles de alterar en la consola (un clic) y el impacto es inmediato y visible.
 - Terraform gestiona el SG con reglas *inline*, así que **cualquier** regla añadida, borrada o modificada aparece en el plan.
 
-El estado vive en **S3** (`online-boutique-tfstate-392730678728`) con bloqueo en **DynamoDB**, por lo que el plan se ejecuta contra el mismo estado desde cualquier máquina.
+El estado vive en **S3** (`online-boutique-tfstate-532727285947`) con bloqueo en **DynamoDB**, por lo que el plan se ejecuta contra el mismo estado desde cualquier máquina.
 
 ### 1.3 Procedimiento
 
@@ -48,7 +48,7 @@ bash scripts/fase4/reto1-drift.sh
 
 El script: (1) imprime las reglas actuales del SG, (2) espera a que borres la regla SSH (22) en la consola, (3) corre `terraform plan -detailed-exitcode` y guarda el log en `docs/evidencias/fase4/reto1-terraform-plan-<fecha>.log`.
 
-Salida esperada (código de salida **2** = hay cambios):
+Salida **real** obtenida (código de salida **2** = hay cambios; antes del cambio manual el mismo comando devolvió **0**):
 
 ```
 # aws_security_group.vault will be updated in-place
@@ -89,7 +89,7 @@ Este reto quedó cubierto por la Fase III; aquí se referencian las evidencias y
 |---|---|---|
 | Instancia | `t3.small`, Amazon Linux, EBS raíz 8 GiB + datos 20 GiB gp3 **cifrados** | `terraform/vault/main.tf` |
 | SG `online-boutique-vault-sg` | 8200 ← SG del clúster EKS + IP del administrador `/32`; 22 ← IP del administrador `/32`; **sin** `0.0.0.0/0` | `terraform/vault/main.tf` (bloques `ingress`) |
-| IP pública / DNS | Cambia en cada stop/start; el script `vault-wake.sh` reemite el certificado TLS con el DNS nuevo | `~/vault-wake.sh` (WSL) |
+| IP pública / DNS | **Elastic IP fija** `3.229.76.82` → `ec2-3-229-76-82.compute-1.amazonaws.com`. Antes cambiaba en cada stop/start y obligaba a reemitir el certificado TLS y tocar scripts/SG; con EIP el endpoint es estable | `terraform/vault/main.tf` (`aws_eip`) |
 
 **Por qué no `0.0.0.0/0` en 8200:** Vault es la raíz de confianza. Abrirlo al mundo convierte cada CVE o fuerza bruta en riesgo directo. Solo el clúster (que necesita leer secretos) y el administrador (que necesita la UI) lo alcanzan.
 
@@ -99,7 +99,7 @@ Este reto quedó cubierto por la Fase III; aquí se referencian las evidencias y
 ### 2.2 UI web de Vault accesible por DNS
 
 ```
-https://ec2-<ip-publica>.compute-1.amazonaws.com:8200/ui
+https://ec2-3-229-76-82.compute-1.amazonaws.com:8200/ui
 ```
 
 El navegador muestra advertencia de certificado **porque la CA es propia** (creada con OpenSSL, fuera del repo) — no es una debilidad, es control total de la cadena de confianza. VSO y GitHub Actions validan contra esa CA con `skipTLSVerify: false`.
@@ -184,11 +184,11 @@ import {   # EKS ya lo había creado; Terraform lo adopta sin recrearlo
 | Decisión | Motivo |
 |---|---|
 | **DaemonSet** y no sidecar | Un agente por nodo cubre los 14 servicios sin modificar el Helm chart de la aplicación |
-| `hostNetwork: true` | AWS Academy **no permite crear roles IAM** → no hay IRSA ni Pod Identity. Fluent Bit usa el rol del nodo (`LabEksNodeRole`) vía IMDS; Auto Mode fija hop limit 1 en IMDS, que bloquea a pods con red propia, pero con hostNetwork la petición es local al nodo |
+| `hostNetwork: true` | AWS Academy **no permite crear roles IAM** → no hay IRSA ni Pod Identity. Fluent Bit intenta primero el rol del nodo (`LabEksNodeRole`) vía IMDS; Auto Mode fija hop limit 1, que bloquea a pods con red propia, pero con hostNetwork la petición es local al nodo |
+| Fallback con Secret `cloudwatch-credentials` (**usado en la práctica**) | En la ejecución real IMDS funcionó pero `LabEksNodeRole` solo trae `AmazonEKSWorkerNodePolicy`, `AmazonEKS_CNI_Policy` y `AmazonEC2ContainerRegistryReadOnly` → `AccessDeniedException` en `CreateLogStream`. `iam:AttachRolePolicy` está prohibido para `voclabs`. Se inyectan las credenciales temporales del lab en un Secret que el DaemonSet lee de forma **opcional**; expiran solas con la sesión y `vault-wake.sh` las renueva. Nunca viven en el repo |
 | Un **stream por microservicio** (`log_stream_template $kubernetes['labels']['app']`) | En la consola se lee de inmediato qué servicio emitió cada evento |
 | Excluye `kube-system`, `amazon-cloudwatch`, `vault-secrets-operator` | Solo logs de la aplicación: menos ruido, menos costo |
 | Imagen `aws-for-fluent-bit:2.32.5` fija | Reproducible; es la distribución oficial de AWS con el plugin nativo `cloudwatch_logs` |
-| Fallback con Secret `cloudwatch-credentials` **opcional** | Si el rol del nodo no tuviera `logs:PutLogEvents`, se inyectan las credenciales temporales del lab (expiran solas; nunca en el repo) |
 
 ### 3.4 Procedimiento
 
@@ -253,6 +253,24 @@ Flujo sugerido para la demo:
 
 ## 6. Reproducibilidad: encender, demostrar, apagar
 
+### 6.1 Prueba real de reproducibilidad: cambio de cuenta
+
+El 8-9 de noviembre la cuenta `392730678728` agotó sus créditos. Todo el proyecto se levantó de nuevo en `532727285947` **solo con el código del repositorio**:
+
+| Paso | Herramienta | Tiempo aprox. |
+|---|---|---|
+| Backend S3 + tfvars (VPC, subredes, roles Lab) | AWS CLI + Terraform | 5 min |
+| EKS Auto Mode + 13 repos ECR + Log Groups | `terraform apply` (17 recursos) | 12 min |
+| 13 imágenes Docker | GitHub Actions (`ci.yml`) en paralelo | 6 min |
+| EC2 + EBS + SG + **Elastic IP** de Vault | `terraform apply` en `terraform/vault/` | 1 min |
+| Instalación de Vault | Ansible (`ok=20 failed=0`) | 2 min |
+| Init (5/3 shares → GPG), KV, policies, JWT GitHub + EKS | scripts por SSH | 3 min |
+| VSO + VaultConnection/Auth/StaticSecret | Helm + `kubectl apply` → `True/True/True` a la primera | 3 min |
+| Aplicación (14 pods) + Fluent Bit | Helm + `kubectl apply` | 8 min |
+
+Lo único que **no** se recupera del código son los datos (usuarios y reseñas de la DB, historial de Raft) — por diseño viven en EBS de la cuenta anterior. Dos cosas se corrigieron para que no vuelvan a doler: la **Elastic IP** y el **StorageClass `gp3` dentro del chart** (antes se había creado a mano).
+
+
 ```powershell
 # Encender (tras Start Lab y copiar credenciales nuevas)
 wsl -d Ubuntu-22.04 -u palomagmt bash /home/palomagmt/vault-wake.sh
@@ -265,7 +283,7 @@ bash scripts/fase4/reto3-cloudwatch.sh
 # Apagar (para no consumir créditos)
 kubectl scale deploy --all --replicas=0 -n default
 kubectl scale deploy vault-secrets-operator-controller-manager --replicas=0 -n vault-secrets-operator
-aws ec2 stop-instances --instance-ids <id-vault>
+aws ec2 stop-instances --instance-ids i-0aaee309d5d0c5fcf
 ```
 
 Lo único que sigue cobrando apagado es el plano de control de EKS (~$2.40/día) y los EBS (~$2/mes).
@@ -290,4 +308,9 @@ Lo único que sigue cobrando apagado es el plano de control de EKS (~$2.40/día)
 | 12 | 3 | Live tail con eventos en tiempo real |
 | 13 | 3 | `kubectl get pods -n amazon-cloudwatch` + `aws logs tail` |
 
-Las capturas se guardan en `docs/evidencias/fase4/`.
+Las capturas se guardan en `docs/evidencias/fase4/`. Ya incluidos ahí (generados en la ejecución real):
+
+- `reto1-terraform-plan-drift.log` — plan con exit code 2 tras borrar la regla SSH
+- `reto1-terraform-apply-reconcile.log` — apply que restauró la regla (`1 changed`)
+- `reto3-log-groups.txt` — los dos grupos con retención 7 días
+- `reto3-log-streams.txt` — un stream por microservicio

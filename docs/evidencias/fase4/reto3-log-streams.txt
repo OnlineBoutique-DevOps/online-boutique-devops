@@ -1,0 +1,1 @@
+adservice	cartservice	currencyservice	frontend	loadgenerator	postgres-review-db	recommendationservice	redis-cart	shippingservice
