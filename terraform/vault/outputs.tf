@@ -10,7 +10,7 @@ output "vault_private_ip" {
 
 output "vault_public_ip" {
   description = "Public address, only when assign_public_ip is enabled"
-  value       = aws_instance.vault.public_ip
+  value       = var.assign_public_ip ? aws_eip.vault[0].public_ip : aws_instance.vault.public_ip
 }
 
 output "vault_security_group_id" {
@@ -21,4 +21,9 @@ output "vault_security_group_id" {
 output "vault_data_volume_id" {
   description = "Persistent encrypted EBS data volume; lifecycle prevents accidental Terraform destruction"
   value       = aws_ebs_volume.vault_data.id
+}
+
+output "vault_public_dns" {
+  description = "Public DNS name (stable thanks to the Elastic IP); SAN of the TLS certificate"
+  value       = var.assign_public_ip ? aws_eip.vault[0].public_dns : null
 }

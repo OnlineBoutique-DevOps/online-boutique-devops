@@ -48,6 +48,20 @@ spec:
         persistentVolumeClaim:
           claimName: postgres-review-db-data
 ---
+# StorageClass para EKS Auto Mode: el provisioner es el driver CSI gestionado
+# por AWS (ebs.csi.eks.amazonaws.com), no el in-tree "kubernetes.io/aws-ebs"
+# de la clase gp2 por defecto, que en Auto Mode no provisiona volumenes.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+provisioner: ebs.csi.eks.amazonaws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

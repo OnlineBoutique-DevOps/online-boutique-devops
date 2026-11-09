@@ -156,3 +156,24 @@ resource "aws_volume_attachment" "vault_data" {
   volume_id   = aws_ebs_volume.vault_data.id
   instance_id = aws_instance.vault.id
 }
+
+# Elastic IP: direccion publica FIJA para el host de Vault.
+# Sin ella, cada stop/start cambia la IP publica y obliga a reemitir el
+# certificado TLS (SAN), actualizar inventario de Ansible, scripts y la
+# variable VAULT_ADDR del pipeline. Con EIP, el DNS publico es estable.
+resource "aws_eip" "vault" {
+  count  = var.assign_public_ip ? 1 : 0
+  domain = "vpc"
+
+  tags = {
+    Name      = "${var.name}-eip"
+    ManagedBy = "Terraform"
+    Purpose   = "Stable public endpoint for Vault UI/SSH"
+  }
+}
+
+resource "aws_eip_association" "vault" {
+  count         = var.assign_public_ip ? 1 : 0
+  instance_id   = aws_instance.vault.id
+  allocation_id = aws_eip.vault[0].id
+}
