@@ -427,7 +427,7 @@ Lo único que requiere lab encendido: el run verde de `vault-smoke.yml` (Captura
 |---|---|
 | Cuenta AWS Academy | `532727285947` · `us-east-1` |
 | Clúster EKS | `online-boutique-cluster` |
-| EC2 Vault | `i-0aaee309d5d0c5fcf` · EIP `3.229.76.82` · privada `172.31.31.7` |
+| EC2 Vault | `i-0fde5de9d19943f97` · EIP `3.229.76.82` · privada `172.31.25.113` |
 | SG Vault | `sg-0de7e2476e4dd4d17` |
 | SG clúster EKS | `sg-0abec498002fb777e` (NodePort `32655`) |
 | Log groups | `/online-boutique/application` · `/aws/eks/online-boutique-cluster/cluster` |
