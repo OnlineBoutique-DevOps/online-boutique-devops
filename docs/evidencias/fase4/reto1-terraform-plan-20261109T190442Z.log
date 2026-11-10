@@ -1,0 +1,53 @@
+data.aws_vpc.existing: Reading...
+data.aws_subnet.vault: Reading...
+data.aws_ami.amazon_linux: Reading...
+aws_eip.vault[0]: Refreshing state... [id=eipalloc-06069a31868eb33ff]
+data.aws_subnet.vault: Read complete after 1s [id=subnet-0c7a08d9150abdeda]
+aws_ebs_volume.vault_data: Refreshing state... [id=vol-098cd0df924158444]
+data.aws_vpc.existing: Read complete after 1s [id=vpc-071f079c1986866d2]
+data.aws_ami.amazon_linux: Read complete after 1s [id=ami-07c1b6f58fb89ce9f]
+aws_security_group.vault: Refreshing state... [id=sg-0de7e2476e4dd4d17]
+aws_instance.vault: Refreshing state... [id=i-0aaee309d5d0c5fcf]
+aws_eip_association.vault[0]: Refreshing state... [id=eipassoc-01402006198cabda6]
+aws_volume_attachment.vault_data: Refreshing state... [id=vai-1698640410]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  ~ update in-place
+
+Terraform will perform the following actions:
+
+  # aws_security_group.vault will be updated in-place
+  ~ resource "aws_security_group" "vault" {
+        id                     = "sg-0de7e2476e4dd4d17"
+      ~ ingress                = [
+          + {
+              + cidr_blocks      = [
+                  + "189.219.190.32/32",
+                ]
+              + description      = "Optional Ansible SSH access from the approved administrator CIDR"
+              + from_port        = 22
+              + ipv6_cidr_blocks = []
+              + prefix_list_ids  = []
+              + protocol         = "tcp"
+              + security_groups  = []
+              + self             = false
+              + to_port          = 22
+            },
+            # (2 unchanged elements hidden)
+        ]
+        name                   = "online-boutique-vault-sg"
+        tags                   = {
+            "ManagedBy" = "Terraform"
+            "Name"      = "online-boutique-vault-sg"
+            "Purpose"   = "Vault phase 3"
+        }
+        # (8 unchanged attributes hidden)
+    }
+
+Plan: 0 to add, 1 to change, 0 to destroy.
+
+─────────────────────────────────────────────────────────────────────────────
+
+Note: You didn't use the -out option to save this plan, so Terraform can't
+guarantee to take exactly these actions if you run "terraform apply" now.

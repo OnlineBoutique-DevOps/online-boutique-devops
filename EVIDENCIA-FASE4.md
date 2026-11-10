@@ -117,7 +117,7 @@ path "kv/data/ci/probe" { capabilities = ["read"] }
 GitHub Actions **no guarda ningún token de Vault**. En cada run, `hashicorp/vault-action` presenta el JWT OIDC de GitHub; Vault verifica el issuer, los *bound claims* (`repository`, `workflow_ref`, `ref`) y emite un token de **5 minutos** limitado a esa política.
 
 Validación:
-- **Positiva:** workflow `vault-smoke.yml` en verde leyendo `kv/ci/probe`.
+- **Positiva:** workflow `vault-smoke.yml` en verde leyendo `kv/ci/probe`. En la cuenta nueva se prepara con `scripts/fase4/prepare-ci-smoke.sh` (instala el runner self-hosted `vault-network` en el EC2 de Vault y permite `main` + la rama de trabajo en el rol); el runner se retira tras la demo.
 - **Negativa:** otro workflow rechazado con `claim "workflow_ref" does not match any associated bound claim values`.
 - **ACL:** con el mismo token, `vault kv get kv/reviewservice` → `permission denied` (403).
 
