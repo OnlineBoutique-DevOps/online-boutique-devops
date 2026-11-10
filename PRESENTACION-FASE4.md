@@ -279,3 +279,70 @@ cd terraform\vault; terraform apply -auto-approve                        # la re
 | 11 | Streams por microservicio | ✅ (12 flujos) |
 | 12 | Live tail con eventos | ✅ (4,533 registros) |
 | 13 | `kubectl get pods -n amazon-cloudwatch` + `aws logs tail` | ☐ |
+
+## Anexo D — Estado actual y pasos pendientes (al 10-nov-2026)
+
+### Estado de los 3 retos
+
+| Reto | Técnico | Evidencia |
+|---|---|---|
+| 1 Drift | ✅ Ejecutado y reconciliado (`exit 0` → regla borrada → `exit 2` → `apply` la restauró) | Captura 2 tomada; faltan **1** (consola sin regla 22) y **3** (regla restaurada por Terraform) |
+| 2 Vault | ✅ EC2 + SG + EIP + UI + roles OIDC configurados en la cuenta nueva | Faltan capturas **4–9** |
+| 3 CloudWatch | ✅ 2 log groups con retención 7 d, 12 streams, 4,533 eventos en Live tail | Capturas 10, 11 y 12 tomadas; falta **13** (terminal con `kubectl get pods -n amazon-cloudwatch` + `aws logs tail`) |
+
+Todo lo anterior está en el repositorio (rama `feature/fase3-vault-ansible`, commit `82df632c`): código, scripts, logs de evidencia y este documento.
+
+### Lo único que requiere el lab encendido
+
+El **run en verde de `vault-smoke.yml`** en la cuenta nueva (Captura 8). El script `scripts/fase4/prepare-ci-smoke.sh` instala el runner self-hosted en el EC2 de Vault y amplía el rol JWT para aceptar `main` y la rama de trabajo.
+
+### Secuencia completa para la próxima sesión
+
+```powershell
+# 1. AWS Academy → Start Lab → AWS Details → copiar las 3 credenciales a ~/.aws/credentials
+
+# 2. Despertar todo (EC2 on, unseal 3/5, apps a 1, credenciales de Fluent Bit renovadas) — ~6 min
+wsl -d Ubuntu-22.04 -u palomagmt bash /home/palomagmt/vault-wake.sh
+
+# 3. Preparar y lanzar el smoke test de CI (Captura 8)
+wsl -d Ubuntu-22.04 -u palomagmt bash /mnt/c/Users/LaMamalona/Documents/GitHub/online-boutique-google/microservices-demo/scripts/fase4/prepare-ci-smoke.sh
+gh workflow run vault-smoke.yml --ref feature/fase3-vault-ansible
+gh run watch
+gh secret list          # misma captura: no existe VAULT_TOKEN
+
+# 4. Capturas de consola pendientes
+#    EC2 > Instancias > online-boutique-vault (IP 3.229.76.82)                      → Captura 4
+#    EC2 > Security Groups > online-boutique-vault-sg > Inbound rules               → Captura 5
+#    https://ec2-3-229-76-82.compute-1.amazonaws.com:8200/ui (Sealed: false)       → Captura 6
+wsl -d Ubuntu-22.04 -u palomagmt bash ~/vault-ui-token.sh    # token ui-demo al portapapeles → login → Captura 7
+wsl -d Ubuntu-22.04 -u palomagmt bash ~/vault-acl-demo.sh    # muestra el rol con bound_claims y TTL 5m → Captura 9
+
+# 5. Reto 1 en consola (Capturas 1 y 3)
+#    Borrar la regla SSH 22 en la consola → Captura 1
+& "C:\Program Files\Git\bin\bash.exe" scripts/fase4/reto1-drift.sh
+cd terraform\vault; terraform apply -auto-approve; cd ..\..     # refrescar consola → Captura 3
+
+# 6. Reto 3 terminal (Captura 13)
+kubectl get pods -n amazon-cloudwatch -o wide
+& "C:\Program Files\Git\bin\bash.exe" scripts/fase4/reto3-cloudwatch.sh
+
+# 7. Al terminar: retirar el runner (repo público) y pausar
+#    (el comando exacto lo imprime prepare-ci-smoke.sh al final)
+kubectl scale deploy --all --replicas=0 -n default
+kubectl scale deploy vault-secrets-operator-controller-manager --replicas=0 -n vault-secrets-operator
+aws ec2 stop-instances --instance-ids i-0aaee309d5d0c5fcf
+```
+
+### Datos fijos de la cuenta nueva (para no buscarlos)
+
+| Dato | Valor |
+|---|---|
+| Cuenta AWS Academy | `532727285947` · `us-east-1` |
+| Clúster EKS | `online-boutique-cluster` |
+| EC2 Vault | `i-0aaee309d5d0c5fcf` · EIP `3.229.76.82` · privada `172.31.31.7` |
+| SG Vault | `sg-0de7e2476e4dd4d17` |
+| SG clúster EKS | `sg-0abec498002fb777e` (NodePort `32655` abierto) |
+| Log groups | `/online-boutique/application` · `/aws/eks/online-boutique-cluster/cluster` |
+| Backend Terraform | S3 `online-boutique-tfstate-532727285947` + DynamoDB `online-boutique-tflocks` |
+| Init de Vault (GPG) | `~/.local/state/online-boutique-vault/init-20261109T174743Z.json.gpg` (WSL) |
+| Tarjeta de prueba | `4432801561520454` · 01/2030 · CVV 672 |
