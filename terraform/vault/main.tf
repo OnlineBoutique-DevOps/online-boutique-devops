@@ -138,6 +138,7 @@ resource "aws_instance" "vault" {
   }
 
   lifecycle {
+    ignore_changes = [ami]
     precondition {
       condition     = data.aws_subnet.vault.vpc_id == data.aws_vpc.existing.id
       error_message = "subnet_id must belong to the existing vpc_id."
