@@ -99,6 +99,8 @@ spec:
                 key: ENABLE_ADMIN_PANEL
           - name: ENABLE_PROFILER
             value: {{ .Values.frontend.env.enableProfiler | quote }}
+          - name: ENV_PLATFORM
+            value: "aws"
           resources:
             requests:
               cpu: 100m
