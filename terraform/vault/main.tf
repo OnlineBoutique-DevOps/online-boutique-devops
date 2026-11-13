@@ -84,6 +84,14 @@ resource "aws_security_group" "vault" {
     }
   }
 
+  ingress {
+    description = "Vault UI over standard HTTPS port (ISP blocks non-standard ports)"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.admin_cidr]
+  }
+
   egress {
     description = "HTTPS for operating system and Vault package retrieval"
     from_port   = 443
