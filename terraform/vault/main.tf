@@ -109,6 +109,14 @@ resource "aws_security_group" "vault" {
   }
 
   egress {
+    description = "NodePort range so Caddy can proxy the Online Boutique frontend inside the VPC"
+    from_port   = 30000
+    to_port     = 32767
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_vpc.existing.cidr_block]
+  }
+
+  egress {
     description = "DNS to the existing VPC resolver network"
     from_port   = 53
     to_port     = 53
